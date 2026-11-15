@@ -1,7 +1,7 @@
-// General screens: sign in (G1–G2) and agency registration (G3–G5).
+// General screens: sign in (G1–G2), agency registration (G3–G5), agency password reset.
 import { useState } from 'react';
 import { useStore, ROLE_LABEL, DEMO_PASSWORD } from '../store.jsx';
-import { Shell, Field, FilePick, useNav } from '../ui.jsx';
+import { Shell, Field, useNav } from '../ui.jsx';
 
 const DEMO_USER = { agency: 'agency.demo', staff: 'staff.demo', admin: 'admin.demo' };
 
@@ -53,12 +53,18 @@ export function SignIn() {
     if (role === 'agency') {
       if (account.status === 'Pending') return setError('Your registration is still waiting for admin approval.');
       if (account.status !== 'Active') {
-        return setError(`This agency account is ${account.status.toLowerCase()}. Contact the clinic.`);
+        return setError(
+          `This agency account is ${account.status.toLowerCase()}` +
+          `${account.statusReason ? ` (${account.statusReason})` : ''}. Contact the clinic.`,
+        );
       }
       return dispatch({ type: 'login', session: { role, name: account.name, agencyId: account.id } });
     }
-    if (account.status !== 'Active') return setError('This account is not active. Contact the clinic admin.');
-    return dispatch({ type: 'login', session: { role, name: account.name, userId: account.id } });
+    if (account.status !== 'Active') return setError('This account is deactivated. Contact the clinic admin.');
+    return dispatch({
+      type: 'login',
+      session: { role, name: account.name, userId: account.id, duty: account.duty },
+    });
   };
 
   return (
@@ -89,14 +95,19 @@ export function SignIn() {
         <Field label="Password" error={error && ' '}>
           <input type={show ? 'text' : 'password'} value={password} onChange={(ev) => setPassword(ev.target.value)} />
         </Field>
-        <button type="button" className="link" onClick={() => setShow(!show)}>
-          {show ? 'Hide' : 'Show'} password
-        </button>
+        <div className="link-row">
+          <button type="button" className="link" onClick={() => setShow(!show)}>
+            {show ? 'Hide' : 'Show'} password
+          </button>
+          <button type="button" className="link" onClick={() => nav('g.forgot', { role, username: username.trim() })}>
+            Forgot password?
+          </button>
+        </div>
         {error && <p className="err">{error}</p>}
         <button className="btn primary block">Sign in</button>
       </form>
       <p className="hint">
-        Demo accounts: agency.demo, staff.demo, admin.demo · password {DEMO_PASSWORD}
+        Demo accounts: agency.demo, staff.demo, billing.demo, updates.demo, admin.demo · password {DEMO_PASSWORD}
       </p>
       <button className="btn block" onClick={() => nav('g.request')}>Request agency access</button>
       <p className="hint">
@@ -111,11 +122,11 @@ const EMPTY = {
   authName: '', authPosition: '', authContact: '', authEmail: '',
   billName: '', billPosition: '', billContact: '', billEmail: '',
   username: '', password: '',
-  license: '', letter: '', repId: '',
   confirm: false,
 };
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Agency registration. No supporting documents are needed. */
 export function RequestAccess() {
   const { state, dispatch } = useStore();
   const { nav, back } = useNav();
@@ -126,9 +137,9 @@ export function RequestAccess() {
   const submit = (ev) => {
     ev.preventDefault();
     const e = {};
-    const required = ['agencyName', 'address', 'authName', 'authPosition', 'authContact', 'authEmail',
-      'billName', 'billPosition', 'billContact', 'billEmail', 'username', 'password', 'license', 'letter'];
-    required.forEach((k) => { if (!String(f[k]).trim()) e[k] = 'This field is required.'; });
+    Object.keys(EMPTY).forEach((k) => {
+      if (k !== 'confirm' && !String(f[k]).trim()) e[k] = 'This field is required.';
+    });
     ['authEmail', 'billEmail'].forEach((k) => { if (f[k] && !EMAIL.test(f[k])) e[k] = 'Enter a valid email address.'; });
     if (f.password && f.password.length < 8) e.password = 'Use at least 8 characters.';
     const taken = state.agencies.some((a) => a.username === f.username.trim())
@@ -145,13 +156,6 @@ export function RequestAccess() {
     <Field label={`${label} *`} error={errors[k]}>
       <input type={type} value={f[k]} placeholder={placeholder} onChange={set(k)} />
     </Field>
-  );
-  const doc = (k, label) => (
-    <>
-      <FilePick file={f[k]} empty={label} pickLabel="Attach"
-        onPick={(name) => setF({ ...f, [k]: name })} onRemove={() => setF({ ...f, [k]: '' })} />
-      {errors[k] && <p className="err">{errors[k]}</p>}
-    </>
   );
 
   return (
@@ -179,11 +183,6 @@ export function RequestAccess() {
         {text('username', 'Username', 'Choose a username')}
         {text('password', 'Password (min. 8 characters)', '', 'password')}
 
-        <h3>Documents</h3>
-        {doc('license', 'DMW license *')}
-        {doc('letter', 'Authorization letter *')}
-        {doc('repId', 'Representative ID (optional)')}
-
         <label className="check">
           <input type="checkbox" checked={f.confirm} onChange={set('confirm')} />
           I confirm I am authorized to register this agency and the details are accurate.
@@ -209,6 +208,113 @@ export function RequestSubmitted({ name }) {
         </p>
         <button className="btn primary block" onClick={() => reset('signin')}>Back to sign in</button>
       </div>
+    </Shell>
+  );
+}
+
+const maskEmail = (email) => email.replace(/^(.).*(@.*)$/, '$1•••••$2');
+const maskPhone = (phone) => `•••• ••• ${phone.replace(/\D/g, '').slice(-4)}`;
+
+/**
+ * Password reset.
+ * Manning agencies verify with a 6-digit code sent to the authorized person's
+ * email or mobile number. Clinic staff ask the clinic admin instead.
+ */
+export function ForgotPassword({ role = 'agency', username: initial = '' }) {
+  const { state, dispatch } = useStore();
+  const { back, reset, toast } = useNav();
+  const [step, setStep] = useState(1);
+  const [username, setUsername] = useState(initial);
+  const [channel, setChannel] = useState('email');
+  const [sent, setSent] = useState(null); // { code, to }
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [again, setAgain] = useState('');
+  const [error, setError] = useState('');
+
+  if (role !== 'agency') {
+    return (
+      <Shell title="Forgot password" back>
+        <div className="card">
+          <b>Ask the clinic admin</b>
+          <p className="sub">
+            Clinic staff and admin passwords are reset by the clinic admin under Manage → Users. The admin
+            will give you a new temporary password.
+          </p>
+          <button className="btn primary block" onClick={back}>Back to sign in</button>
+        </div>
+      </Shell>
+    );
+  }
+
+  const agency = state.agencies.find((a) => a.username === username.trim());
+
+  const sendCode = (ev) => {
+    ev.preventDefault();
+    if (!agency) return setError('No manning agency account uses that username.');
+    // Demo only: a real system sends this by email or SMS and never shows it on screen.
+    const fresh = String(Math.floor(100000 + Math.random() * 900000));
+    setSent({
+      code: fresh,
+      to: channel === 'email' ? maskEmail(agency.authorized.email) : maskPhone(agency.authorized.contact),
+    });
+    setError('');
+    setCode('');
+    return setStep(2);
+  };
+
+  const save = (ev) => {
+    ev.preventDefault();
+    if (code.trim() !== sent.code) return setError('That verification code is not correct.');
+    if (password.length < 8) return setError('Use at least 8 characters for the new password.');
+    if (password !== again) return setError('The two passwords do not match.');
+    dispatch({ type: 'resetAgencyPassword', username: agency.username, password });
+    toast('Password changed. Sign in with your new password.');
+    return reset('signin');
+  };
+
+  return (
+    <Shell title="Forgot password" back>
+      <h2>Reset agency password</h2>
+      {step === 1 ? (
+        <form onSubmit={sendCode} noValidate>
+          <p className="sub">We send a verification code to the authorized person on your agency account.</p>
+          <Field label="Agency username" error={error}>
+            <input type="text" value={username} autoCapitalize="none"
+              onChange={(ev) => { setUsername(ev.target.value); setError(''); }} />
+          </Field>
+          <Field label="Send the code to">
+            <select value={channel} onChange={(ev) => setChannel(ev.target.value)}>
+              <option value="email">Email address</option>
+              <option value="sms">Mobile number</option>
+            </select>
+          </Field>
+          <button className="btn primary block">Send verification code</button>
+        </form>
+      ) : (
+        <form onSubmit={save} noValidate>
+          <p className="sub">A 6-digit code was sent to {sent.to}.</p>
+          <div className="note amber">
+            <b>Demo only</b>
+            No real message is sent in this prototype. Your code is {sent.code}.
+          </div>
+          <Field label="Verification code">
+            <input type="text" inputMode="numeric" maxLength={6} value={code}
+              onChange={(ev) => { setCode(ev.target.value); setError(''); }} />
+          </Field>
+          <Field label="New password (min. 8 characters)">
+            <input type="password" value={password} onChange={(ev) => { setPassword(ev.target.value); setError(''); }} />
+          </Field>
+          <Field label="Repeat new password">
+            <input type="password" value={again} onChange={(ev) => { setAgain(ev.target.value); setError(''); }} />
+          </Field>
+          {error && <p className="err">{error}</p>}
+          <button className="btn primary block">Change password</button>
+          <button type="button" className="btn block" onClick={() => { setStep(1); setError(''); }}>
+            Send a new code
+          </button>
+        </form>
+      )}
     </Shell>
   );
 }

@@ -1,6 +1,6 @@
 // Clinic admin side (A1–A17).
 import { useState } from 'react';
-import { useStore, STATUSES, IN_PROGRESS, CLOSED, agencyName, dayOf, stamp } from '../store.jsx';
+import { useStore, STATUSES, IN_PROGRESS, CLOSED, DUTIES, agencyName, dayOf, stamp } from '../store.jsx';
 import { Shell, Chip, Field, Paged, Rows, useNav } from '../ui.jsx';
 import { EndorsementCard } from './Shared.jsx';
 
@@ -78,86 +78,232 @@ export function Manage() {
   );
 }
 
+/** One clinic account: role, assignment, password reset, deactivation with a reason. */
+function UserCard({ u }) {
+  const { state, dispatch } = useStore();
+  const { toast } = useNav();
+  const [mode, setMode] = useState(null); // null | 'reset' | 'deactivate'
+  const [value, setValue] = useState('');
+  const [error, setError] = useState('');
+  const self = u.id === state.session.userId;
+  const active = u.status === 'Active';
+  const close = () => { setMode(null); setValue(''); setError(''); };
+
+  const resetPassword = () => {
+    if (value.length < 8) return setError('Use at least 8 characters.');
+    dispatch({ type: 'resetUser', id: u.id, password: value });
+    toast(`New password set for ${u.name}. Give it to them directly.`);
+    return close();
+  };
+  const deactivate = () => {
+    if (!value.trim()) return setError('Give a reason for deactivating this account.');
+    dispatch({
+      type: 'setUser', id: u.id, verb: 'Deactivated account', note: `Reason: ${value.trim()}`,
+      patch: { status: 'Deactivated', statusReason: value.trim() },
+    });
+    return close();
+  };
+  const activate = () => dispatch({
+    type: 'setUser', id: u.id, verb: 'Activated account', patch: { status: 'Active', statusReason: null },
+  });
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <div>
+          <b>{u.name}{self ? ' (you)' : ''}</b>
+          <div className="meta">{u.role}{u.role === 'Clinic Staff' ? ` · ${u.duty}` : ''}</div>
+          <div className="meta">Username: {u.username}</div>
+        </div>
+        <Chip>{u.status}</Chip>
+      </div>
+      {u.statusReason && <div className="note amber"><b>Reason for deactivation</b>{u.statusReason}</div>}
+      <div className="two">
+        <Field label="Role">
+          <select
+            value={u.role}
+            disabled={self}
+            onChange={(ev) => dispatch({
+              type: 'setUser', id: u.id, verb: 'Changed role', note: ev.target.value,
+              patch: { role: ev.target.value, duty: ev.target.value === 'Clinic Staff' ? (u.duty || 'Both') : null },
+            })}
+          >
+            <option>Clinic Staff</option>
+            <option>Clinic Admin</option>
+          </select>
+        </Field>
+        {u.role === 'Clinic Staff' && (
+          <Field label="Assigned to">
+            <select
+              value={u.duty}
+              onChange={(ev) => dispatch({
+                type: 'setUser', id: u.id, verb: 'Changed assignment', note: ev.target.value,
+                patch: { duty: ev.target.value },
+              })}
+            >
+              {DUTIES.map((d) => <option key={d}>{d}</option>)}
+            </select>
+          </Field>
+        )}
+      </div>
+
+      {mode === 'reset' && (
+        <>
+          <Field label="New temporary password (min. 8 characters)" error={error}>
+            <input type="text" value={value} onChange={(ev) => { setValue(ev.target.value); setError(''); }} />
+          </Field>
+          <div className="btn-row">
+            <button className="btn primary" onClick={resetPassword}>Save new password</button>
+            <button className="btn" onClick={close}>Cancel</button>
+          </div>
+        </>
+      )}
+      {mode === 'deactivate' && (
+        <>
+          <Field label="Reason for deactivating *" error={error}>
+            <textarea value={value} placeholder="e.g. Resigned, on extended leave" onChange={(ev) => { setValue(ev.target.value); setError(''); }} />
+          </Field>
+          <div className="btn-row">
+            <button className="btn danger" onClick={deactivate}>Confirm deactivation</button>
+            <button className="btn" onClick={close}>Cancel</button>
+          </div>
+        </>
+      )}
+      {!mode && (
+        <div className="btn-row">
+          <button className="btn" onClick={() => setMode('reset')}>Reset password</button>
+          {active
+            ? <button className="btn danger" disabled={self} onClick={() => setMode('deactivate')}>Deactivate</button>
+            : <button className="btn" onClick={activate}>Activate</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const NEW_USER = { name: '', username: '', password: '', role: 'Clinic Staff', duty: 'Both' };
+
 function Users() {
   const { state, dispatch } = useStore();
   const { toast } = useNav();
-  const [name, setName] = useState('');
-  const [role, setRole] = useState('Clinic Staff');
-  const [error, setError] = useState('');
+  const [f, setF] = useState(NEW_USER);
+  const [errors, setErrors] = useState({});
+  const set = (k) => (ev) => setF({ ...f, [k]: ev.target.value });
 
-  const invite = () => {
-    if (!name.trim()) return setError('Enter the full name.');
-    dispatch({ type: 'addUser', name: name.trim(), role });
-    toast(`Invite sent to ${name.trim()}`);
-    setName('');
-    return setError('');
+  // Clinic staff do not register themselves: the admin creates each account.
+  const create = () => {
+    const e = {};
+    const username = f.username.trim();
+    if (!f.name.trim()) e.name = 'Enter the full name.';
+    if (!username) e.username = 'Enter a username.';
+    else if (state.users.some((u) => u.username === username) || state.agencies.some((a) => a.username === username)) {
+      e.username = 'That username is already taken.';
+    }
+    if (f.password.length < 8) e.password = 'Use at least 8 characters.';
+    setErrors(e);
+    if (Object.keys(e).length) return;
+    dispatch({ type: 'addUser', name: f.name.trim(), username, password: f.password, role: f.role, duty: f.duty });
+    toast(`Account created for ${f.name.trim()}`);
+    setF(NEW_USER);
   };
 
   return (
     <>
       <h2>Clinic accounts</h2>
-      {state.users.map((u) => {
-        const self = u.id === state.session.userId;
-        const active = u.status === 'Active';
-        return (
-          <div className="card" key={u.id}>
-            <div className="card-head">
-              <div>
-                <b>{u.name}{self ? ' (you)' : ''}</b>
-                <div className="meta">{u.role}</div>
-              </div>
-              <Chip>{u.status}</Chip>
-            </div>
-            <Field label="Role">
-              <select
-                value={u.role}
-                disabled={self}
-                onChange={(ev) => dispatch({ type: 'setUser', id: u.id, patch: { role: ev.target.value }, verb: 'Changed role' })}
-              >
-                <option>Clinic Staff</option>
-                <option>Clinic Admin</option>
+      <p className="sub">The admin creates and manages every clinic account.</p>
+      {state.users.map((u) => <UserCard key={u.id} u={u} />)}
+
+      <h3>Create clinic account</h3>
+      <div className="card">
+        <Field label="Full name *" error={errors.name}>
+          <input type="text" value={f.name} placeholder="e.g. Maria Santos" onChange={set('name')} />
+        </Field>
+        <div className="two">
+          <Field label="Username *" error={errors.username}>
+            <input type="text" value={f.username} autoCapitalize="none" placeholder="e.g. msantos" onChange={set('username')} />
+          </Field>
+          <Field label="Temporary password *" error={errors.password}>
+            <input type="text" value={f.password} placeholder="Min. 8 characters" onChange={set('password')} />
+          </Field>
+        </div>
+        <div className="two">
+          <Field label="Role">
+            <select value={f.role} onChange={set('role')}>
+              <option>Clinic Staff</option>
+              <option>Clinic Admin</option>
+            </select>
+          </Field>
+          {f.role === 'Clinic Staff' && (
+            <Field label="Assigned to">
+              <select value={f.duty} onChange={set('duty')}>
+                {DUTIES.map((d) => <option key={d}>{d}</option>)}
               </select>
             </Field>
-            <div className="btn-row">
-              <button className="btn" onClick={() => { dispatch({ type: 'resetUser', id: u.id }); toast(`Access reset for ${u.name}`); }}>
-                Reset access
-              </button>
-              <button
-                className={`btn ${active ? 'danger' : ''}`}
-                disabled={self}
-                onClick={() => dispatch({
-                  type: 'setUser', id: u.id,
-                  patch: { status: active ? 'Deactivated' : 'Active' },
-                  verb: active ? 'Deactivated account' : 'Activated account',
-                })}
-              >
-                {active ? 'Deactivate' : 'Activate'}
-              </button>
-            </div>
-          </div>
-        );
-      })}
-
-      <h3>Add staff account</h3>
-      <div className="card">
-        <Field label="Full name" error={error}>
-          <input type="text" value={name} placeholder="e.g. Maria Santos" onChange={(ev) => setName(ev.target.value)} />
-        </Field>
-        <Field label="Role">
-          <select value={role} onChange={(ev) => setRole(ev.target.value)}>
-            <option>Clinic Staff</option>
-            <option>Clinic Admin</option>
-          </select>
-        </Field>
-        <button className="btn primary block" onClick={invite}>Send invite</button>
+          )}
+        </div>
+        <button className="btn primary block" onClick={create}>Create account</button>
       </div>
     </>
   );
 }
 
-function Agencies() {
-  const { state, dispatch } = useStore();
+/** One accredited agency. Suspending requires a reason. */
+function AgencyRow({ a, total }) {
+  const { dispatch } = useStore();
   const { nav } = useNav();
+  const [suspending, setSuspending] = useState(false);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState('');
+  const active = a.status === 'Active';
+
+  const suspend = () => {
+    if (!reason.trim()) return setError('Give a reason for suspending this agency.');
+    dispatch({ type: 'agencyStatus', id: a.id, status: 'Suspended', verb: 'suspended', reason: reason.trim() });
+    setReason('');
+    return setSuspending(false);
+  };
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <div>
+          <b>{a.name}</b>
+          <div className="meta">{total} endorsements</div>
+        </div>
+        <Chip>{a.status}</Chip>
+      </div>
+      {a.statusReason && <div className="note amber"><b>Reason</b>{a.statusReason}</div>}
+      {suspending ? (
+        <>
+          <Field label="Reason for suspending *" error={error}>
+            <textarea value={reason} placeholder="e.g. Accreditation expired" onChange={(ev) => { setReason(ev.target.value); setError(''); }} />
+          </Field>
+          <div className="btn-row">
+            <button className="btn danger" onClick={suspend}>Confirm suspension</button>
+            <button className="btn" onClick={() => { setSuspending(false); setError(''); }}>Cancel</button>
+          </div>
+        </>
+      ) : (
+        <div className="btn-row">
+          <button className="btn" onClick={() => nav('a.agency', { id: a.id })}>View details ›</button>
+          {active ? (
+            <button className="btn danger" onClick={() => setSuspending(true)}>Suspend</button>
+          ) : (
+            <button
+              className="btn"
+              onClick={() => dispatch({ type: 'agencyStatus', id: a.id, status: 'Active', verb: 'reactivated' })}
+            >
+              Reactivate
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Agencies() {
+  const { state } = useStore();
   const [q, setQ] = useState('');
   const requests = state.agencies.filter((a) => a.status === 'Pending');
   const needle = q.trim().toLowerCase();
@@ -172,33 +318,7 @@ function Agencies() {
         <input type="search" value={q} placeholder="Search agencies" onChange={(ev) => setQ(ev.target.value)} />
       </Field>
       <p className="hint">Showing {list.length} of {state.agencies.length - requests.length}</p>
-      {list.map((a) => {
-        const active = a.status === 'Active';
-        return (
-          <div className="card" key={a.id}>
-            <div className="card-head">
-              <div>
-                <b>{a.name}</b>
-                <div className="meta">{total(a.id)} endorsements</div>
-              </div>
-              <Chip>{a.status}</Chip>
-            </div>
-            <div className="btn-row">
-              <button className="btn" onClick={() => nav('a.agency', { id: a.id })}>View details ›</button>
-              <button
-                className={`btn ${active ? 'danger' : ''}`}
-                onClick={() => dispatch({
-                  type: 'agencyStatus', id: a.id,
-                  status: active ? 'Suspended' : 'Active',
-                  verb: active ? 'suspended' : 'reactivated',
-                })}
-              >
-                {active ? 'Suspend' : 'Reactivate'}
-              </button>
-            </div>
-          </div>
-        );
-      })}
+      {list.map((a) => <AgencyRow key={a.id} a={a} total={total(a.id)} />)}
     </>
   );
 }
@@ -237,32 +357,21 @@ function Policy() {
 }
 
 function AgencyCards({ a }) {
-  const { toast } = useNav();
   return (
-    <>
-      <div className="card">
-        <Rows
-          items={[
-            ['Address', a.address],
-            ['Authorized person', `${a.authorized.name} · ${a.authorized.position}`],
-            ['Authorized person contact no.', a.authorized.contact],
-            ['Authorized person email', a.authorized.email],
-            ['In charge of medical report and billing', `${a.billing.name} · ${a.billing.position}`],
-            ['Billing contact no.', a.billing.contact],
-            ['Billing email', a.billing.email],
-          ]}
-        />
-      </div>
-      <div className="card">
-        <b>Documents submitted</b>
-        {a.docs.map((d) => (
-          <div className="filerow" key={d}>
-            <span>📄 {d}</span>
-            <button className="link" onClick={() => toast(`${d} is a demo file`)}>Preview</button>
-          </div>
-        ))}
-      </div>
-    </>
+    <div className="card">
+      <Rows
+        items={[
+          ['Address', a.address],
+          ['Username', a.username],
+          ['Authorized person', `${a.authorized.name} · ${a.authorized.position}`],
+          ['Authorized person contact no.', a.authorized.contact],
+          ['Authorized person email', a.authorized.email],
+          ['In charge of medical report and billing', `${a.billing.name} · ${a.billing.position}`],
+          ['Billing contact no.', a.billing.contact],
+          ['Billing email', a.billing.email],
+        ]}
+      />
+    </div>
   );
 }
 
@@ -324,7 +433,7 @@ export function AgencyDetails({ id }) {
       <div className="card">
         <div className="card-head"><b>{a.name}</b><Chip>{a.status}</Chip></div>
         <div className="meta">{total} endorsements</div>
-        {a.rejectReason && <div className="meta">Reason: {a.rejectReason}</div>}
+        {a.statusReason && <div className="meta">Reason: {a.statusReason}</div>}
       </div>
       <AgencyCards a={a} />
     </Shell>
@@ -506,46 +615,39 @@ export function BreakGlassReview({ id }) {
 }
 
 const ACTION_TONE = {
-  Accepted: 'green', 'Break-glass': 'red', 'Flagged break-glass': 'red', 'Deactivated account': 'red',
-  'Updated status': 'teal', 'Sent billing': 'teal', Endorsed: 'teal',
+  Accepted: 'green', 'Marked arrived': 'green', 'Created account': 'green', 'Activated account': 'green',
+  'Break-glass': 'red', 'Flagged break-glass': 'red', 'Deactivated account': 'red',
+  'Agency suspended': 'red', 'Agency rejected': 'red',
+  'Updated status': 'teal', 'Sent billing': 'teal',
 };
 
-/** A15 Audit log (read-only) */
+/** A15 Audit log (read-only). Clinic users only: agency activity is not recorded. */
 export function AuditLog() {
   const { state } = useStore();
-  const [group, setGroup] = useState('all');
   const [q, setQ] = useState('');
   const [who, setWho] = useState('');
   const [action, setAction] = useState('');
-  const count = (g) => state.audit.filter((x) => g === 'all' || x.group === g).length;
   const people = [...new Set(state.audit.map((x) => x.who))];
   const actions = [...new Set(state.audit.map((x) => x.action))];
   const needle = q.trim().toLowerCase();
   const list = state.audit.filter(
     (x) =>
-      (group === 'all' || x.group === group) &&
       (!who || x.who === who) &&
       (!action || x.action === action) &&
-      (!needle || String(x.ref).toLowerCase().includes(needle)),
+      (!needle || `${x.ref} ${x.note || ''}`.toLowerCase().includes(needle)),
   );
 
   return (
     <Shell title="Audit log" tab="a.audit">
-      <div className="seg">
-        {[['all', 'Everyone'], ['clinic', 'Clinic'], ['agency', 'Manning agencies']].map(([g, label]) => (
-          <button key={g} className={g === group ? 'on' : ''} onClick={() => setGroup(g)}>
-            <strong>{count(g)}</strong>
-            {label}
-          </button>
-        ))}
-      </div>
+      <h2>Clinic activity</h2>
+      <p className="sub">Actions by clinic staff and admins. Manning agency activity is not included.</p>
       <Field label="Search">
-        <input type="search" value={q} placeholder="Search by reference number" onChange={(ev) => setQ(ev.target.value)} />
+        <input type="search" value={q} placeholder="Search by reference number or note" onChange={(ev) => setQ(ev.target.value)} />
       </Field>
       <div className="two">
-        <Field label="User">
+        <Field label="Clinic user">
           <select value={who} onChange={(ev) => setWho(ev.target.value)}>
-            <option value="">All users</option>
+            <option value="">All clinic users</option>
             {people.map((p) => <option key={p}>{p}</option>)}
           </select>
         </Field>
@@ -557,7 +659,7 @@ export function AuditLog() {
         </Field>
       </div>
       <Paged
-        key={`${group}:${who}:${action}:${needle}`}
+        key={`${who}:${action}:${needle}`}
         items={list}
         size={10}
         empty="No audit entries match."

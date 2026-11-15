@@ -1,7 +1,9 @@
 // Clinic staff side (S1–S21).
+// Staff accounts are role-based: "Endorsements and updates", "Billing", or "Both".
 import { useState } from 'react';
 import {
-  useStore, STATUSES, IN_PROGRESS, UPDATE_STATUSES, agencyName, dayOf, stamp, hasBreakGlass,
+  useStore, STATUSES, IN_PROGRESS, UPDATE_STATUSES, agencyName, dayOf, stamp, fmtDate,
+  hasBreakGlass, can, updateDue, billingDue, daysLeft,
 } from '../store.jsx';
 import { Shell, Chip, Field, FilePick, Paged, Rows, useNav } from '../ui.jsx';
 
@@ -14,6 +16,18 @@ function NetBanner() {
       <span>{inside ? '📶 On clinic Wi‑Fi · full access' : '📵 Outside clinic network · limited view'}</span>
       <button className="btn sm" onClick={() => dispatch({ type: 'toggleNetwork' })}>Demo: switch</button>
     </div>
+  );
+}
+
+/** Shown when a staff account opens a page outside its assigned work. */
+function NoAccess({ title, tab, need }) {
+  return (
+    <Shell title={title} tab={tab}>
+      <div className="note amber">
+        <b>Not part of your role</b>
+        This page is for staff assigned to {need}. Ask the clinic admin if your assignment should change.
+      </div>
+    </Shell>
   );
 }
 
@@ -75,8 +89,13 @@ function useOpenPatient() {
 export function Dashboard() {
   const { state } = useStore();
   const { nav, reset } = useNav();
-  const count = (s) => state.endorsements.filter((e) => e.status === s).length;
-  const billing = state.endorsements.filter((e) => e.billing.state === 'toSend').length;
+  const all = state.endorsements;
+  const count = (s) => all.filter((e) => e.status === s).length;
+  const billing = all.filter((e) => e.billing.state === 'toSend');
+  const billingLate = billing.filter((e) => daysLeft(billingDue(e)) < 0).length;
+  const updatesLate = all.filter((e) => updateDue(e) && daysLeft(updateDue(e)) < 0).length;
+  const updates = can(state.session, 'updates');
+  const bills = can(state.session, 'billing');
   const tiles = [
     ['Accepted', 'c-slate'], ['Treatment in Progress', 'c-teal'],
     ['Non-reporting Status', 'c-amber'], ['Expired', 'c-red'],
@@ -87,15 +106,32 @@ export function Dashboard() {
   return (
     <Shell title="Dashboard" tab="s.dash">
       <h2>Patients at a glance</h2>
+      <p className="sub">Signed in as {state.session.name} · Assigned to: {state.session.duty}</p>
       <div className="stats two-col">
-        <button className="stat row edge" onClick={() => reset('s.queue')}>
-          <strong className="c-amber">{count('Pending')}</strong>
-          <small>New endorsements ›</small>
-        </button>
-        <button className="stat row edge-teal" onClick={() => reset('s.billing')}>
-          <strong className="c-teal">{billing}</strong>
-          <small>Billing to send ›</small>
-        </button>
+        {updates && (
+          <button className="stat row edge" onClick={() => reset('s.queue')}>
+            <strong className="c-amber">{count('Pending')}</strong>
+            <small>New endorsements ›</small>
+          </button>
+        )}
+        {updates && (
+          <button className="stat row edge" onClick={() => reset('s.active')}>
+            <strong className="c-red">{updatesLate}</strong>
+            <small>Weekly updates overdue ›</small>
+          </button>
+        )}
+        {bills && (
+          <button className="stat row edge-teal" onClick={() => reset('s.billing')}>
+            <strong className="c-teal">{billing.length}</strong>
+            <small>Billing to send ›</small>
+          </button>
+        )}
+        {bills && (
+          <button className="stat row edge-teal" onClick={() => reset('s.billing')}>
+            <strong className="c-red">{billingLate}</strong>
+            <small>Billing past 30 days ›</small>
+          </button>
+        )}
         {tiles.map(([s, tone]) => (
           <button key={s} className="stat row" onClick={() => nav('s.patients', { status: s })}>
             <strong className={tone}>{count(s)}</strong>
@@ -117,6 +153,10 @@ export function Queue() {
   const pending = state.endorsements.filter((e) => e.status === 'Pending');
   const [list, filters, key] = useListFilter(pending);
 
+  if (!can(state.session, 'updates')) {
+    return <NoAccess title="Review queue" tab="s.queue" need="endorsements and updates" />;
+  }
+
   const accept = (e, cash) => {
     dispatch({ type: 'accept', id: e.ref, cash });
     setCashFor(null);
@@ -137,6 +177,11 @@ export function Queue() {
             <div className="over">{agencyName(state, e.agencyId)}</div>
             <b>{e.name}</b>
             <div className="meta">{e.ref} · Received {stamp(e.receivedMs)}</div>
+            <div className="meta">Can come to the clinic: {fmtDate(e.visitDate)}</div>
+            <div className="filerow">
+              <span>📄 Referral letter: {e.referral}</span>
+              <button className="link" onClick={() => toast(`${e.referral} is a demo file`)}>View</button>
+            </div>
             <div className="chips"><Chip>Pending</Chip></div>
             {cashFor === e.ref ? (
               <>
@@ -163,7 +208,7 @@ export function Queue() {
   );
 }
 
-/** One active case with the status + medical report update form (S7–S9). */
+/** One active case: arrival at the clinic, then weekly updates (S7–S9). */
 function ActiveCard({ e }) {
   const { state, dispatch } = useStore();
   const { nav, toast } = useNav();
@@ -173,7 +218,9 @@ function ActiveCard({ e }) {
   const [file, setFile] = useState('');
   const [error, setError] = useState('');
   const last = e.timeline[e.timeline.length - 1];
-  const showForm = open || e.updateRequested;
+  const due = updateDue(e);
+  const left = due ? daysLeft(due) : null;
+  const showForm = e.arrivedMs && (open || e.updateRequested);
 
   const send = () => {
     if (!file) return setError('Attach the medical report before sending the update.');
@@ -190,13 +237,33 @@ function ActiveCard({ e }) {
       <b>{e.name}</b>
       <div className="meta">{e.ref} · Received {stamp(e.receivedMs)}</div>
       <div className="meta">Last update: {last.label} · {stamp(last.ms)}</div>
+      {due && (
+        <div className="meta">
+          Next weekly update due {dayOf(due)}
+          {left < 0 ? ` · ${-left} day${left === -1 ? '' : 's'} late` : ` · in ${left} day${left === 1 ? '' : 's'}`}
+        </div>
+      )}
       <div className="chips">
+        {due && left < 0 && <Chip tone="red">Update overdue</Chip>}
         {e.updateRequested && <Chip>Update requested</Chip>}
         {e.cashBasis && <Chip>Cash basis</Chip>}
         <Chip>{e.status}</Chip>
       </div>
 
-      {showForm ? (
+      {!e.arrivedMs ? (
+        <>
+          <div className="note amber">
+            <b>Waiting for the patient · expected {fmtDate(e.visitDate)}</b>
+            Weekly updates start once the patient has reported to the clinic.
+          </div>
+          <button
+            className="btn primary block"
+            onClick={() => { dispatch({ type: 'arrive', id: e.ref }); toast(`${e.name} marked as arrived · agency notified`); }}
+          >
+            Mark as arrived at clinic
+          </button>
+        </>
+      ) : showForm ? (
         <>
           {e.updateRequested && <div className="note amber">📩 Update requested by the agency</div>}
           <Field label="Update status">
@@ -210,7 +277,7 @@ function ActiveCard({ e }) {
           <button className="btn primary block" onClick={send}>Send update</button>
         </>
       ) : (
-        <button className="btn primary block" onClick={() => setOpen(true)}>Update status</button>
+        <button className="btn primary block" onClick={() => setOpen(true)}>Send weekly update</button>
       )}
       <div className="btn-row">
         <button className="btn" onClick={() => nav('timeline', { id: e.ref })}>Timeline</button>
@@ -223,15 +290,22 @@ function ActiveCard({ e }) {
 /** S4–S5 Active cases */
 export function Active() {
   const { state } = useStore();
+  // Agency requests first, then the cases whose weekly update is due soonest.
+  const rank = (e) => (e.updateRequested ? -Infinity : updateDue(e) ?? Infinity);
   const active = state.endorsements
     .filter((e) => IN_PROGRESS.includes(e.status))
-    .sort((a, b) => Number(b.updateRequested) - Number(a.updateRequested));
+    .sort((a, b) => rank(a) - rank(b) || b.receivedMs - a.receivedMs);
   const [list, filters, key] = useListFilter(active);
+
+  if (!can(state.session, 'updates')) {
+    return <NoAccess title="Active patients" tab="s.active" need="endorsements and updates" />;
+  }
 
   return (
     <Shell title="Active patients" tab="s.active">
       <NetBanner />
       <h2>Needs updates</h2>
+      <p className="sub">Updates are sent weekly, starting when the patient arrives at the clinic.</p>
       {filters}
       <Paged key={key} items={list} empty="No active cases." render={(e) => <ActiveCard key={e.ref} e={e} />} />
     </Shell>
@@ -244,6 +318,8 @@ function BillingCard({ e }) {
   const [file, setFile] = useState('');
   const [error, setError] = useState('');
   const contact = state.agencies.find((a) => a.id === e.agencyId).billing;
+  const due = billingDue(e);
+  const left = daysLeft(due);
 
   const send = () => {
     if (!file) return setError('Attach the billing statement before sending.');
@@ -252,10 +328,16 @@ function BillingCard({ e }) {
   };
 
   return (
-    <div className="card">
-      <b>{e.name}</b>
+    <div className={`card${left < 0 ? ' flag-red' : ''}`}>
+      <div className="card-head">
+        <b>{e.name}</b>
+        {left < 0
+          ? <Chip tone="red">Overdue {-left}d</Chip>
+          : <Chip tone={left <= 7 ? 'amber' : 'slate'}>{left} day{left === 1 ? '' : 's'} left</Chip>}
+      </div>
       <div className="meta">{agencyName(state, e.agencyId)}</div>
       <div className="meta">{e.ref} · Report sent {stamp(e.billing.reportMs)}</div>
+      <div className="meta">Send by {dayOf(due)} (within 30 days of the report)</div>
       <div className="meta">Send to: {contact.name} · {contact.email}</div>
       {e.cashBasis && <div className="chips"><Chip>Cash basis</Chip></div>}
       <FilePick file={file} empty="No billing file" onPick={(n) => { setFile(n); setError(''); }} onRemove={() => setFile('')} />
@@ -265,26 +347,44 @@ function BillingCard({ e }) {
   );
 }
 
-/** S10–S12 Billing */
+/** S10–S12 Billing, with search */
 export function Billing() {
   const { state } = useStore();
-  const toSend = state.endorsements.filter((e) => e.billing.state === 'toSend');
+  const [q, setQ] = useState('');
+  const needle = q.trim().toLowerCase();
+  const match = (e) =>
+    !needle ||
+    `${e.name} ${e.ref} ${e.vessel} ${agencyName(state, e.agencyId)} ${e.billing.file || ''}`.toLowerCase().includes(needle);
+  const toSend = state.endorsements
+    .filter((e) => e.billing.state === 'toSend' && match(e))
+    .sort((a, b) => billingDue(a) - billingDue(b)); // closest deadline first
   const sent = state.endorsements
-    .filter((e) => e.billing.state === 'sent')
+    .filter((e) => e.billing.state === 'sent' && match(e))
     .sort((a, b) => b.billing.sentMs - a.billing.sentMs);
+
+  if (!can(state.session, 'billing')) {
+    return <NoAccess title="Billing" tab="s.billing" need="billing" />;
+  }
 
   return (
     <Shell title="Billing" tab="s.billing">
       <h2>Billing</h2>
-      <p className="sub">Sending a medical report creates a billing item here.</p>
+      <p className="sub">
+        Sending a medical report creates a billing item here. Billing must reach the agency within 30 days.
+      </p>
+      <Field label="Search billing">
+        <input type="search" value={q} placeholder="Search patient, reference, agency or vessel" onChange={(ev) => setQ(ev.target.value)} />
+      </Field>
+
       <h3>To send ({toSend.length})</h3>
-      {toSend.length === 0 && <p className="empty">Nothing to send.</p>}
-      {toSend.map((e) => <BillingCard key={e.ref} e={e} />)}
+      <Paged key={`t:${needle}`} items={toSend} size={6} empty="Nothing to send." render={(e) => <BillingCard key={e.ref} e={e} />} />
 
       <h3>Sent ({sent.length})</h3>
       <Paged
+        key={`s:${needle}`}
         items={sent}
-        empty="Nothing sent yet."
+        size={6}
+        empty="No sent billing matches."
         render={(e) => (
           <div className="card" key={e.ref}>
             <div className="card-head">
@@ -357,8 +457,6 @@ export function PatientOverview({ id }) {
   );
   const full = state.insideNetwork || !!grant;
   const agent = agencyName(state, e.agencyId);
-  const birthday = new Date(e.birthday).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const repatriation = new Date(e.repatriation).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   return (
     <Shell title="Patient overview" back tab="s.dash">
@@ -372,7 +470,14 @@ export function PatientOverview({ id }) {
       </div>
       <div className="card">
         <b style={{ fontSize: 17 }}>{e.name}</b>
-        <Rows items={[['Status', e.status], ['Manning agency', agent], ['Case', e.case]]} />
+        <Rows
+          items={[
+            ['Status', e.status],
+            ['Manning agency', agent],
+            ['Case', e.case],
+            ['Clinic visit', e.arrivedMs ? `Arrived ${stamp(e.arrivedMs)}` : `Expected ${fmtDate(e.visitDate)}`],
+          ]}
+        />
       </div>
       <div className="card">
         {full ? (
@@ -380,12 +485,13 @@ export function PatientOverview({ id }) {
             items={[
               ['Contact', `${e.name} · ${e.contact}`],
               ['Email', e.email],
-              ['Birthday / age', `${birthday} · ${e.age}`],
+              ['Birthday / age', `${fmtDate(e.birthday)} · ${e.age}`],
               ['Address', e.address],
               ['Position', e.position],
               ['Vessel', e.vessel],
               ['Agent', agent],
-              ['Date of repatriation', repatriation],
+              ['Date of repatriation', fmtDate(e.repatriation)],
+              ['Referral letter', e.referral],
             ]}
           />
         ) : (

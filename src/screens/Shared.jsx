@@ -1,6 +1,6 @@
 // Screens used by more than one role: status timeline, alerts, profile.
 import { useState } from 'react';
-import { useStore, myAlerts, stamp, isClosed, agencyName, ROLE_LABEL } from '../store.jsx';
+import { useStore, myAlerts, stamp, dayOf, fmtDate, isClosed, updateDue, agencyName, ROLE_LABEL } from '../store.jsx';
 import { Shell, Chip, Field, Rows, useNav } from '../ui.jsx';
 
 /** Compact endorsement card used in most lists. */
@@ -45,6 +45,7 @@ export function Timeline({ id }) {
   const items = [...e.timeline].reverse(); // newest first
   const latest = items[0];
   const closed = isClosed(e);
+  const due = updateDue(e);
 
   return (
     <Shell title="Status timeline" back tab={HOME_TAB[role]}>
@@ -55,6 +56,17 @@ export function Timeline({ id }) {
         <div className="chips">
           <Chip>{e.status}</Chip>
           {e.cashBasis && <Chip>Cash basis</Chip>}
+        </div>
+        <Rows
+          items={[
+            ['Can come to the clinic', fmtDate(e.visitDate)],
+            ['Arrived at clinic', e.arrivedMs ? stamp(e.arrivedMs) : 'Not yet'],
+            ...(due ? [['Next weekly update due', dayOf(due)]] : []),
+          ]}
+        />
+        <div className="filerow">
+          <span>📄 Referral letter: {e.referral}</span>
+          <button className="link" onClick={() => toast(`${e.referral} is a demo file`)}>View</button>
         </div>
       </div>
 
@@ -96,7 +108,12 @@ export function Timeline({ id }) {
       )}
 
       {role === 'agency' && !closed && e.status !== 'Pending' && (
-        e.updateRequested ? (
+        !e.arrivedMs ? (
+          <div className="note amber">
+            <b>Waiting for the patient to report to the clinic.</b>
+            Weekly medical updates start once the patient arrives. Expected visit: {fmtDate(e.visitDate)}.
+          </div>
+        ) : e.updateRequested ? (
           <div className="note amber">
             <b>Medical update requested.</b>
             The clinic will send the report, then a billing statement follows.
@@ -162,6 +179,7 @@ export function Profile() {
         <div className="card">
           <b>{name}</b>
           <div className="meta">{ROLE_LABEL[role]} · NGC Medical Specialists Clinic</div>
+          {role === 'staff' && <div className="meta">Assigned to: {state.session.duty}</div>}
         </div>
         <button className="btn primary block" onClick={signOut}>Sign out</button>
       </Shell>
@@ -217,7 +235,7 @@ function AgencyProfile({ onSignOut }) {
           <b>{a.name}</b>
           <Chip>{a.status}</Chip>
         </div>
-        <div className="meta">Manning agency account · details you submitted when requesting access</div>
+        <div className="meta">Manning agency account · Username: {a.username}</div>
       </div>
       <div className="card">
         <b>Agency</b>
@@ -233,15 +251,6 @@ function AgencyProfile({ onSignOut }) {
         <b>In charge of medical report and billing</b>
         <Rows items={[['Name', a.billing.name], ['Position', a.billing.position],
           ['Contact no.', a.billing.contact], ['Email address', a.billing.email]]} />
-      </div>
-      <div className="card">
-        <b>Documents submitted</b>
-        {a.docs.map((d) => (
-          <div className="filerow" key={d}>
-            <span>📄 {d}</span>
-            <button className="link" onClick={() => toast(`${d} is a demo file`)}>Preview</button>
-          </div>
-        ))}
       </div>
       <button className="btn primary block" onClick={() => setEditing(true)}>Edit details</button>
       <button className="btn block" onClick={onSignOut}>Sign out</button>

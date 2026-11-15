@@ -1,6 +1,6 @@
 // Shared layout and small UI building blocks.
 import { createContext, useContext, useRef, useState } from 'react';
-import { useStore, myAlerts } from './store.jsx';
+import { useStore, myAlerts, can } from './store.jsx';
 
 /** Navigation context: { nav, back, reset, toast } — provided by App. */
 export const NavCtx = createContext(null);
@@ -10,14 +10,15 @@ const TABS = {
   agency: [
     { to: 'm.home', icon: '⌂', label: 'Home' },
     { to: 'm.list', icon: '≡', label: 'Endorsements' },
+    { to: 'm.billing', icon: '₱', label: 'Billing' },
     { to: 'alerts', icon: '🔔', label: 'Alerts' },
     { to: 'profile', icon: '☺', label: 'Profile' },
   ],
   staff: [
     { to: 's.dash', icon: '⌂', label: 'Dashboard' },
-    { to: 's.queue', icon: '☰', label: 'Queue' },
-    { to: 's.active', icon: '◷', label: 'Active' },
-    { to: 's.billing', icon: '₱', label: 'Billing' },
+    { to: 's.queue', icon: '☰', label: 'Queue', needs: 'updates' },
+    { to: 's.active', icon: '◷', label: 'Active', needs: 'updates' },
+    { to: 's.billing', icon: '₱', label: 'Billing', needs: 'billing' },
     { to: 'alerts', icon: '🔔', label: 'Alerts' },
     { to: 'profile', icon: '☺', label: 'Profile' },
   ],
@@ -35,7 +36,8 @@ export function Shell({ title, back, tab, children }) {
   const { state, dispatch } = useStore();
   const { back: goBack, reset } = useNav();
   const role = state.session?.role;
-  const tabs = role ? TABS[role] : null;
+  // Staff only see the tabs that match their assignment.
+  const tabs = role ? TABS[role].filter((t) => !t.needs || can(state.session, t.needs)) : null;
   const hasAlerts = myAlerts(state).length > 0;
 
   return (

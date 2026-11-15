@@ -62,6 +62,7 @@ button { cursor: pointer; }
 .card { background: var(--card); border-radius: 12px; padding: 12px 14px; margin: 0 0 10px; box-shadow: 0 1px 2px rgba(16, 35, 58, 0.06); }
 .card.tap { cursor: pointer; width: 100%; text-align: left; border: 0; display: block; }
 .card.flag { border-left: 3px solid var(--amber); }
+.card.flag-red { border-left: 3px solid var(--red); }
 .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .card-head b { font-size: 15px; }
 .over { font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
@@ -113,6 +114,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--teal); }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .check { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; margin: 10px 0 4px; }
 .check input { margin-top: 2px; }
+.link-row { display: flex; justify-content: space-between; gap: 12px; }
 .err { color: var(--red); font-size: 12px; margin: 6px 0; }
 .filerow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
 .filerow span { overflow-wrap: anywhere; }
@@ -127,6 +129,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--teal); }
 /* ----- dashboards ----- */
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0; }
 .stats.two-col { grid-template-columns: 1fr 1fr; }
+.stats.four { grid-template-columns: 1fr 1fr; }
 .stat { background: #fff; border: 0; border-radius: 12px; padding: 10px 12px; text-align: left; box-shadow: 0 1px 2px rgba(16, 35, 58, 0.06); }
 .stat strong { display: block; font-size: 24px; line-height: 1.1; color: var(--navy); }
 .stat small { font-size: 11px; color: var(--muted); }
@@ -230,6 +233,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--teal); }
   .bars { height: 160px; }
   .bars div span { font-size: 11px; top: -17px; }
   .stats { gap: 12px; }
+  .stats.four { grid-template-columns: repeat(4, 1fr); }
   .stat strong { font-size: 34px; }
   .stat { padding: 16px 18px; }
   .card { padding: 14px 18px; }
