@@ -19,7 +19,6 @@ const HOME_TAB = { agency: 'm.list', staff: 's.active', admin: 'a.overview' };
 export function Timeline({ id }) {
   const { state, dispatch } = useStore();
   const { toast } = useNav();
-  const [confirming, setConfirming] = useState(false);
   const { role, agencyId } = state.session;
   const e = state.endorsements.find((x) => x.ref === id);
 
@@ -40,8 +39,7 @@ export function Timeline({ id }) {
 
   const request = () => {
     dispatch({ type: 'requestUpdate', id });
-    setConfirming(false);
-    toast('Update request sent to the clinic');
+    toast('The clinic has been notified.');
   };
 
   return (
@@ -84,11 +82,11 @@ export function Timeline({ id }) {
           )}
           {role === 'agency' && !closed && lastVisit && (
             e.updateRequested ? (
-              <Note tone="amber" icon="mail" title="Medical update requested.">
-                The clinic sends the medical report at the patient's next visit.
+              <Note tone="teal" icon="check" title="Medical update requested.">
+                The clinic has been notified.
               </Note>
             ) : (
-              <button className="btn primary" onClick={() => setConfirming(true)}>Request medical update</button>
+              <button className="btn primary" onClick={request}>Request medical update</button>
             )
           )}
         </div>
@@ -124,25 +122,6 @@ export function Timeline({ id }) {
           </ul>
         </Card>
       </div>
-
-      {confirming && (
-        <Modal
-          title="Request a medical update?"
-          sub={`${e.name}, ${e.ref}`}
-          onClose={() => setConfirming(false)}
-          footer={(
-            <>
-              <button className="btn" onClick={() => setConfirming(false)}>Cancel</button>
-              <button className="btn primary" onClick={request}>Confirm request</button>
-            </>
-          )}
-        >
-          <p>
-            The clinic is notified. The medical report is sent at the patient's next clinic visit, and its billing
-            statement follows separately to your medical report and billing contact.
-          </p>
-        </Modal>
-      )}
     </Shell>
   );
 }

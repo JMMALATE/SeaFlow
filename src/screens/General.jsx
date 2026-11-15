@@ -43,7 +43,7 @@ export function SignIn() {
     if (!account) {
       return setRoleWarning(
         `There is no ${ROLE_LABEL[role]} account with the username "${u}". ` +
-        'Check the username, or choose the role your account belongs to.',
+        'Check the username, or choose the account type your account belongs to.',
       );
     }
 
@@ -71,10 +71,10 @@ export function SignIn() {
 
   return (
     <Shell title="Sign in">
-      <h2>Sign in to your workspace</h2>
-      <p className="lead">Choose your role, then enter your username and password.</p>
+      <h2>Welcome back to SeaFlow</h2>
+      <p className="lead">Select your account type and enter your credentials to continue.</p>
       <form className="form" onSubmit={submit} noValidate>
-        <Field label="Role" error={roleWarning && ' '}>
+        <Field label="Account type" error={roleWarning && ' '}>
           <Select
             value={role}
             onChange={changeRole}
@@ -82,13 +82,13 @@ export function SignIn() {
           />
         </Field>
         {roleWarning && (
-          <Note tone="amber" icon="alert" title="No account in this role">{roleWarning}</Note>
+          <Note tone="amber" icon="alert" title="No account of this type">{roleWarning}</Note>
         )}
         <Field label="Username" error={usernameBad && ' '}>
-          <input type="text" value={username} autoCapitalize="none" onChange={(ev) => setUsername(ev.target.value)} />
+          <input type="text" value={username} autoCapitalize="none" autoComplete="username" onChange={(ev) => setUsername(ev.target.value)} />
         </Field>
         <Field label="Password" error={error && ' '}>
-          <input type={show ? 'text' : 'password'} value={password} onChange={(ev) => setPassword(ev.target.value)} />
+          <input type={show ? 'text' : 'password'} value={password} autoComplete="current-password" onChange={(ev) => setPassword(ev.target.value)} />
         </Field>
         <div className="link-row">
           <button type="button" className="link" onClick={() => setShow(!show)}>
@@ -99,15 +99,20 @@ export function SignIn() {
           </button>
         </div>
         {error && <Note tone="red" icon="alert">{error}</Note>}
-        <button className="btn primary block">Sign in</button>
-        <button type="button" className="btn block" onClick={() => nav('g.request')}>Request agency access</button>
+        <button className="btn primary block lg">Sign in to SeaFlow</button>
       </form>
+
+      <div className="auth-alt">
+        <span>New manning agency?</span>
+        <button type="button" className="btn block" onClick={() => nav('g.request')}>Request an agency account</button>
+      </div>
+
+      <div className="auth-demo">
+        <b>Demo accounts</b>
+        agency.demo, staff.demo, billing.demo, updates.demo, admin.demo. Password: {DEMO_PASSWORD}
+      </div>
       <p className="hint">
-        Demo accounts: agency.demo, staff.demo, billing.demo, updates.demo, admin.demo. Password: {DEMO_PASSWORD}
-      </p>
-      <p className="hint">
-        Authorized users only. Access is logged, and you are signed out after {state.policy.autoLogoutMinutes} minutes
-        of inactivity.
+        You are signed out automatically after {state.policy.autoLogoutMinutes} minutes of inactivity.
       </p>
     </Shell>
   );

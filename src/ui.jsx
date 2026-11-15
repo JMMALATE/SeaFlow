@@ -70,10 +70,31 @@ const TABS = {
   ],
 };
 
-function Brand({ className = 'brand', sub }) {
+/*
+ * The official SeaFlow logo.
+ * Put the logo image at public/seaflow-logo.png and it is used everywhere:
+ * the sign-in panel, the sidebar and the mobile sign-in header. The image is
+ * shown as-is (never cropped, stretched or recoloured) on a white tile, so a
+ * logo with a white background sits cleanly on the navy panels. Until the
+ * file exists, a simple placeholder mark is shown instead.
+ */
+const LOGO_SRC = './seaflow-logo.png';
+let logoMissing = false; // remembered for the whole session, so a missing file is requested only once
+
+export function Logo({ size = 'sm' }) {
+  const [missing, setMissing] = useState(logoMissing);
+  if (missing) return <span className={`mark ${size}`}><Icon name="wave" size={size === 'lg' ? 30 : 20} /></span>;
+  return (
+    <span className={`logo-tile ${size}`}>
+      <img src={LOGO_SRC} alt="SeaFlow logo" onError={() => { logoMissing = true; setMissing(true); }} />
+    </span>
+  );
+}
+
+function Brand({ className = 'brand', sub, size }) {
   return (
     <div className={className}>
-      <span className="mark"><Icon name="wave" size={20} /></span>
+      <Logo size={size} />
       <span>
         SeaFlow
         {sub && <small>{sub}</small>}
@@ -81,6 +102,13 @@ function Brand({ className = 'brand', sub }) {
     </div>
   );
 }
+
+// How the three kinds of users work together, shown on the sign-in panel.
+const WORKFLOW = [
+  { icon: 'file', title: 'Endorsement', text: 'Manning agencies submit and monitor seafarer referrals.' },
+  { icon: 'pulse', title: 'Medical processing', text: 'Clinic staff record clinic visits, manage medical assessments and update patient statuses.' },
+  { icon: 'receipt', title: 'Reports and billing', text: 'Medical reports and billing statements are managed and shared through the platform.' },
+];
 
 /**
  * Page frame.
@@ -96,19 +124,36 @@ export function Shell({ title, back, tab, wide, children }) {
     return (
       <div className="auth">
         <aside className="auth-art">
-          <Brand />
-          <div>
-            <h2>Every endorsement, from referral to fit to work.</h2>
-            <p>
-              The patient endorsement and information access system of NGC Medical Specialists Clinic and its
-              partner manning agencies.
+          {/* Decorative wave lines; purely visual. */}
+          <svg className="auth-waves" viewBox="0 0 600 220" preserveAspectRatio="none" aria-hidden="true">
+            <path d="M0 60c60-36 120-36 180 0s120 36 180 0 120-36 180 0 60 18 60 18" />
+            <path d="M0 110c60-36 120-36 180 0s120 36 180 0 120-36 180 0 60 18 60 18" />
+            <path d="M0 160c60-36 120-36 180 0s120 36 180 0 120-36 180 0 60 18 60 18" />
+          </svg>
+          <div className="auth-art-in">
+            <Brand size="lg" sub="NGC Medical Specialists Clinic" />
+            <div className="auth-pitch">
+              <h2>From endorsement to fit-to-work, all in one place.</h2>
+              <p>
+                A centralized platform connecting NGC Medical Specialists Clinic, manning agencies and clinic
+                staff to manage seafarer endorsements, medical visits, reports and billing.
+              </p>
+            </div>
+            <ol className="flow">
+              {WORKFLOW.map((step, i) => (
+                <li key={step.title}>
+                  <span className="flow-icon"><Icon name={step.icon} size={20} /></span>
+                  <div>
+                    <b><span className="flow-no">0{i + 1}</span>{step.title}</b>
+                    <p>{step.text}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+            <p className="auth-foot">
+              <Icon name="lock" size={14} /> Authorized users only. Every access to patient information is logged.
             </p>
           </div>
-          <ul>
-            <li><Icon name="check" /> Agencies endorse seafarers and follow each clinic visit.</li>
-            <li><Icon name="check" /> Clinic staff send a medical report and billing statement per visit.</li>
-            <li><Icon name="check" /> Every access to patient information is logged.</li>
-          </ul>
         </aside>
         <main className="auth-main">
           <div className={`auth-box${wide ? ' wide' : ''}`}>
