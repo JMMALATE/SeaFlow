@@ -12,11 +12,13 @@ const SCREENS = {
   signin: G.SignIn, // G1–G2
   'g.request': G.RequestAccess, // G3–G4
   'g.submitted': G.RequestSubmitted, // G5
+  'g.forgot': G.ForgotPassword, // agency password reset by verification code
 
   'm.home': M.Home, // M1
   'm.list': M.Endorsements, // M2–M3
   'm.new': M.NewEndorsement, // M4–M7, M16–M17
   'm.submitted': M.Submitted, // M18
+  'm.billing': M.Billing, // billing statements received by the agency
 
   's.dash': S.Dashboard, // S1
   's.queue': S.Queue, // S2–S3, S6
@@ -41,7 +43,7 @@ const SCREENS = {
 };
 
 const HOME = { agency: 'm.home', staff: 's.dash', admin: 'a.overview' };
-const PUBLIC = ['signin', 'g.request', 'g.submitted'];
+const PUBLIC = ['signin', 'g.request', 'g.submitted', 'g.forgot'];
 
 function Inner() {
   const { state, dispatch } = useStore();
@@ -95,19 +97,18 @@ function Inner() {
 
   // Guard: never show a signed-in screen without a session, or the reverse.
   let top = stack[stack.length - 1];
+  let depth = stack.length;
   const isPublic = PUBLIC.includes(top.name);
-  if (!role && !isPublic) top = { name: 'signin', params: {} };
-  if (role && isPublic) top = { name: HOME[role], params: {} };
+  if (!role && !isPublic) { top = { name: 'signin', params: {} }; depth = 1; }
+  if (role && isPublic) { top = { name: HOME[role], params: {} }; depth = 1; }
   const Screen = SCREENS[top.name];
 
   return (
-    <div className="stage">
-      <div className="phone">
-        <NavCtx.Provider value={ctx}>
-          <Screen key={`${stack.length}:${top.name}`} {...top.params} />
-        </NavCtx.Provider>
-        {toast && <div className="toast" role="status">{toast}</div>}
-      </div>
+    <div className="root">
+      <NavCtx.Provider value={ctx}>
+        <Screen key={`${depth}:${top.name}`} {...top.params} />
+      </NavCtx.Provider>
+      {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
 }

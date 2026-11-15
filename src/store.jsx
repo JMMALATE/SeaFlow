@@ -20,8 +20,12 @@ export const UPDATE_STATUSES = ['Treatment in Progress', 'Non-reporting Status',
 export const ROLE_LABEL = { agency: 'Manning Agency', staff: 'Clinic Staff', admin: 'Clinic Admin' };
 export const DEMO_PASSWORD = 'demo1234';
 
+// What a Clinic Staff account is allowed to handle.
+export const DUTIES = ['Endorsements and updates', 'Billing', 'Both'];
+
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
+export const BILLING_WINDOW = 30 * DAY; // billing must reach the agency within 30 days
 
 /* ---------- helpers ---------- */
 
@@ -31,11 +35,40 @@ export const dayOf = (ms) =>
 export const stamp = (ms = Date.now()) =>
   `${dayOf(ms)} · ${new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
 
+/** "2026-11-16" -> "Nov 16, 2026" */
+export const fmtDate = (iso) =>
+  (iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
+
 export const refOf = (n) => `SF-2026-${String(n).padStart(4, '0')}`;
 
 export const agencyName = (state, id) => state.agencies.find((a) => a.id === id)?.name ?? '—';
 
 export const isClosed = (e) => CLOSED.includes(e.status);
+
+/** Whole days until a deadline (negative when it has passed). */
+export const daysLeft = (ms) => Math.ceil((ms - Date.now()) / DAY);
+
+/**
+ * The clinic visits of a case, oldest first.
+ * A visit is a timeline entry holding the status set at that visit and its
+ * medical report. Its billing statement is sent later, as a separate timeline
+ * entry; the visit keeps a copy of the billing details so lists can show them.
+ */
+export const visitsOf = (e) => e.timeline.filter((t) => t.kind === 'visit');
+
+/** Every clinic visit across all cases, as { e, v } pairs (for the billing lists). */
+export const billingItems = (state) =>
+  state.endorsements.flatMap((e) => visitsOf(e).map((v) => ({ e, v })));
+
+/** Deadline for the billing statement of a visit that does not have one yet. */
+export const billingDue = (v) => v.ms + BILLING_WINDOW;
+
+/** Role-based access for clinic staff: what = 'updates' or 'billing'. */
+export function can(session, what) {
+  if (session?.role !== 'staff') return false;
+  if (session.duty === 'Both') return true;
+  return what === 'billing' ? session.duty === 'Billing' : session.duty === DUTIES[0];
+}
 
 /** Alerts addressed to the signed-in user. */
 export function myAlerts(state) {
@@ -60,7 +93,6 @@ function seed() {
   const agency = (id, name, address, status, authorized, billing, username, daysAgo) => ({
     id, name, address, status, authorized, billing, username,
     password: DEMO_PASSWORD,
-    docs: ['DMW license (PDF)', 'Authorization letter (PDF)'],
     requestedMs: NOW - daysAgo * DAY,
   });
   const person = (name, position, contact, email) => ({ name, position, contact, email });
@@ -92,10 +124,14 @@ function seed() {
       'seabridge', 1.5),
   ];
 
+  const user = (id, name, role, duty, username) => ({
+    id, name, role, duty, username, status: 'Active', password: DEMO_PASSWORD,
+  });
   const users = [
-    { id: 'u1', name: 'R. Santos', role: 'Clinic Staff', status: 'Active', username: 'staff.demo', password: DEMO_PASSWORD },
-    { id: 'u2', name: 'L. Garcia', role: 'Clinic Staff', status: 'Active', username: 'lgarcia', password: DEMO_PASSWORD },
-    { id: 'u3', name: 'A. Gomez', role: 'Clinic Admin', status: 'Active', username: 'admin.demo', password: DEMO_PASSWORD },
+    user('u1', 'R. Santos', 'Clinic Staff', 'Both', 'staff.demo'),
+    user('u2', 'L. Garcia', 'Clinic Staff', 'Billing', 'billing.demo'),
+    user('u3', 'M. Reyes', 'Clinic Staff', DUTIES[0], 'updates.demo'),
+    user('u4', 'A. Gomez', 'Clinic Admin', null, 'admin.demo'),
   ];
 
   // Build one endorsement with a timeline that matches its status.
@@ -104,27 +140,39 @@ function seed() {
     const receivedMs = NOW - hoursAgo * HOUR;
     const timeline = [{ label: 'Received', ms: receivedMs }];
     let turnaroundMin = null;
-    let billing = { state: 'none' };
+    // A clinic visit sets a status and sends its medical report. The billing
+    // statement for the visit follows later as its own timeline entry.
+    const visit = (no, label, ms, billedMs) => {
+      const billing = billedMs ? `Billing_${id}_V${no}.pdf` : null;
+      timeline.push({
+        kind: 'visit', n: no, label, ms,
+        report: `Medical_Report_${id}_V${no}.pdf`, reportBy: 'M. Reyes',
+        billing, billingMs: billedMs || null, billingBy: billedMs ? 'L. Garcia' : null,
+      });
+      if (billedMs) {
+        timeline.push({
+          kind: 'billing', n: no, label: `Billing statement for clinic visit ${no}`,
+          ms: billedMs, file: billing, by: 'L. Garcia',
+        });
+      }
+    };
     if (status !== 'Pending') {
       turnaroundMin = 8 + (n % 5) * 4;
       timeline.push({ label: 'Accepted', ms: receivedMs + turnaroundMin * 60e3 });
       if (status !== 'Accepted') {
-        const closed = CLOSED.includes(status);
-        const ms = Math.min(NOW - HOUR, receivedMs + (closed ? 72 : 3) * HOUR);
-        timeline.push({
-          label: status, ms, kind: 'report',
-          file: closed ? `Final_Medical_Report_${id}.pdf` : `Medical_Report_${id}.pdf`,
-        });
-        if (closed) {
-          billing = { state: 'sent', file: `Billing_${id}.pdf`, reportMs: ms, sentMs: ms + HOUR };
-          timeline.push({ label: 'Billing statement sent', ms: ms + HOUR, kind: 'billing', file: `Billing_${id}.pdf` });
+        if (CLOSED.includes(status)) {
+          // Two visits: the first check-up, then the visit that closed the case.
+          visit(1, 'Treatment in Progress', receivedMs + 2 * HOUR, receivedMs + 26 * HOUR);
+          visit(2, status, receivedMs + 72 * HOUR, Math.min(receivedMs + 96 * HOUR, NOW - HOUR / 2));
         } else {
-          billing = { state: 'toSend', reportMs: ms };
+          // One visit so far; every second one still waits for its billing statement.
+          const ms = Math.max(receivedMs + 2 * HOUR, NOW - ((n % 9) + 1) * DAY);
+          visit(1, status, ms, n % 2 === 1 ? Math.min(ms + DAY, NOW - HOUR / 2) : null);
         }
       }
     }
     return {
-      ref: id, name, position, vessel, agencyId, status, receivedMs, timeline, turnaroundMin, billing,
+      ref: id, name, position, vessel, agencyId, status, receivedMs, timeline, turnaroundMin,
       case: kase,
       birthday: `19${70 + (n % 28)}-0${1 + (n % 9)}-1${n % 9}`,
       age: 2026 - (1970 + (n % 28)),
@@ -132,10 +180,19 @@ function seed() {
       email: `${name.toLowerCase().replace(/[^a-z]+/g, '.')}@mail.demo`,
       contact: `0917 000 ${String(n).padStart(4, '0')}`,
       repatriation: new Date(receivedMs - 4 * DAY).toISOString().slice(0, 10),
+      visitDate: new Date(receivedMs + DAY).toISOString().slice(0, 10), // when the patient can come to the clinic
+      referral: `Referral_Letter_${id}.pdf`,
       cashBasis: false,
       updateRequested: false,
       ...extra,
     };
+  };
+
+  // Make the latest visit of a case wait for its billing statement (for demo variety).
+  const unsendBilling = (e) => {
+    const last = visitsOf(e).at(-1);
+    e.timeline = e.timeline.filter((t) => !(t.kind === 'billing' && t.n === last.n));
+    Object.assign(last, { billing: null, billingMs: null, billingBy: null });
   };
 
   const named = [
@@ -150,10 +207,7 @@ function seed() {
     mk(132, 'Mark Villanueva', '2nd Mate', 'MV Ocean Grace', 'a3', 'Treatment in Progress', 9, 'Fractured wrist'),
     mk(130, 'Pedro Ramos', 'Oiler', 'MV Pacific Star', 'a1', 'Fit to Work', 150, 'Dermatitis'),
   ];
-  // Pedro Ramos: report sent, billing still waiting to be sent.
-  const pedro = named[named.length - 1];
-  pedro.timeline = pedro.timeline.filter((t) => t.kind !== 'billing');
-  pedro.billing = { state: 'toSend', reportMs: pedro.timeline[pedro.timeline.length - 1].ms };
+  unsendBilling(named[named.length - 1]); // Pedro Ramos: last visit still waits for billing
 
   // Older records for Pacific Crew so lists, paging and reports have volume.
   const first = ['Jose', 'Ana', 'Liza', 'Noel', 'Rosa', 'Arnel', 'Tina', 'Ben', 'Cora', 'Dino', 'Elmer', 'Faye'];
@@ -167,6 +221,7 @@ function seed() {
   const filler = Array.from({ length: 119 }, (_, i) =>
     mk(1000 + i, `${first[i % first.length]} ${last[(i * 7) % last.length]}`, posts[i % posts.length],
       ships[i % ships.length], 'a1', cycle[i % cycle.length], 90 + i * 10, cases[i % cases.length]));
+  unsendBilling(filler[100]); // one old visit whose billing is past the 30-day window
 
   const endorsements = [...named, ...filler].sort((a, b) => b.receivedMs - a.receivedMs);
 
@@ -185,10 +240,10 @@ function seed() {
       { id: 1, to: 'admin', text: 'New agency access request from Island Spirit Crewing Corp.', ms: NOW - 12 * HOUR },
     ],
     breakGlass: [],
+    // The audit log records clinic users only (staff and admin).
     audit: [
-      { id: 3, who: 'R. Santos', role: 'Clinic Staff', group: 'clinic', action: 'Accepted', ref: juan.ref, ms: juan.timeline[1].ms },
-      { id: 2, who: 'R. Santos', role: 'Clinic Staff', group: 'clinic', action: 'Viewed', ref: juan.ref, ms: juan.timeline[1].ms - 60e3 },
-      { id: 1, who: 'Pacific Crew Manning Agency', role: 'Manning Agency', group: 'agency', action: 'Endorsed', ref: juan.ref, ms: juan.receivedMs },
+      { id: 2, who: 'R. Santos', role: 'Clinic Staff', action: 'Accepted endorsement', ref: juan.ref, ms: juan.timeline[1].ms, note: 'Patient: Juan Dela Cruz · Pacific Crew Manning Agency' },
+      { id: 1, who: 'R. Santos', role: 'Clinic Staff', action: 'Viewed record', ref: juan.ref, ms: juan.timeline[1].ms - 60e3, note: 'Patient: Juan Dela Cruz' },
     ],
   };
 }
@@ -199,19 +254,19 @@ function reducer(s, a) {
   const me = a.type === 'login' ? a.session : s.session;
   const now = Date.now();
 
-  const audit = (action, id = '—', note) => [
-    {
-      id: s.audit.length + 1,
-      who: me?.name ?? 'System',
-      role: me ? ROLE_LABEL[me.role] : '',
-      group: me?.role === 'agency' ? 'agency' : 'clinic',
-      action, ref: id, ms: now, note,
-    },
-    ...s.audit,
-  ];
+  // Agency activity is not written to the audit log.
+  // `base` lets one action add several entries (a visit logs its report and its billing).
+  const audit = (action, id = '—', note, base = s.audit) => {
+    if (!me || me.role === 'agency') return base;
+    return [
+      { id: base.length + 1, who: me.name, role: ROLE_LABEL[me.role], action, ref: id, ms: now, note },
+      ...base,
+    ];
+  };
   const alert = (list, to, text) => [{ id: list.length + 1, to, text, ms: now }, ...list];
   const patch = (id, fn) => s.endorsements.map((e) => (e.ref === id ? fn(e) : e));
   const find = (id) => s.endorsements.find((e) => e.ref === id);
+  const userName = (id) => s.users.find((u) => u.id === id)?.name;
 
   switch (a.type) {
     case 'login':
@@ -232,7 +287,6 @@ function reducer(s, a) {
         authorized: { name: f.authName, position: f.authPosition, contact: f.authContact, email: f.authEmail },
         billing: { name: f.billName, position: f.billPosition, contact: f.billContact, email: f.billEmail },
         username: f.username, password: f.password,
-        docs: ['DMW license (PDF)', 'Authorization letter (PDF)', ...(f.repId ? ['Representative ID'] : [])],
         requestedMs: now,
       };
       return {
@@ -241,6 +295,13 @@ function reducer(s, a) {
         alerts: alert(s.alerts, 'admin', `New agency access request from ${item.name}.`),
       };
     }
+
+    // Agency "forgot password": runs after the verification code was confirmed.
+    case 'resetAgencyPassword':
+      return {
+        ...s,
+        agencies: s.agencies.map((g) => (g.username === a.username ? { ...g, password: a.password } : g)),
+      };
 
     case 'updateAgencyContacts':
       return {
@@ -256,14 +317,13 @@ function reducer(s, a) {
       const item = {
         ...a.form, ref: id, agencyId: me.agencyId, status: 'Pending', receivedMs: now,
         timeline: [{ label: 'Received', ms: now }],
-        turnaroundMin: null, billing: { state: 'none' }, cashBasis: false, updateRequested: false,
+        turnaroundMin: null, cashBasis: false, updateRequested: false,
       };
       return {
         ...s,
         nextRef: s.nextRef + 1,
         endorsements: [item, ...s.endorsements],
         alerts: alert(s.alerts, 'staff', `New endorsement from ${agencyName(s, me.agencyId)}.`),
-        audit: audit('Endorsed', id),
       };
     }
 
@@ -272,7 +332,6 @@ function reducer(s, a) {
         ...s,
         endorsements: patch(a.id, (e) => ({ ...e, updateRequested: true })),
         alerts: alert(s.alerts, 'staff', `Medical update requested for ${a.id}.`),
-        audit: audit('Requested update', a.id),
       };
 
     /* ----- clinic staff ----- */
@@ -286,40 +345,56 @@ function reducer(s, a) {
           timeline: [...x.timeline, { label: 'Accepted', ms: now }],
         })),
         alerts: alert(s.alerts, `agency:${e.agencyId}`, `${a.id} was accepted by the clinic${a.cash ? ' on a cash basis' : ''}.`),
-        audit: audit('Accepted', a.id, a.cash ? 'Cash basis (self-pay)' : undefined),
+        audit: audit('Accepted endorsement', a.id,
+          `Patient: ${e.name} · ${agencyName(s, e.agencyId)}${a.cash ? ' · Cash basis (self-pay)' : ''}`),
       };
     }
 
-    case 'sendUpdate': {
+    // A clinic visit: the new status and its medical report.
+    // The billing statement is not sent with it; billing staff send it later.
+    case 'recordVisit': {
       const e = find(a.id);
+      const n = visitsOf(e).length + 1;
+      const entry = {
+        kind: 'visit', n, label: a.status, ms: now,
+        report: a.report, reportBy: me.name,
+        billing: null, billingMs: null, billingBy: null,
+      };
       return {
         ...s,
         endorsements: patch(a.id, (x) => ({
-          ...x, status: a.status, updateRequested: false,
-          timeline: [...x.timeline, { label: a.status, ms: now, file: a.file, kind: 'report' }],
-          billing: { state: 'toSend', reportMs: now },
+          ...x, status: a.status, updateRequested: false, timeline: [...x.timeline, entry],
         })),
-        alerts: alert(s.alerts, `agency:${e.agencyId}`, `Medical report received for ${a.id} (${a.status}).`),
-        audit: audit('Updated status', a.id, a.status),
+        alerts: alert(s.alerts, `agency:${e.agencyId}`,
+          `Clinic visit ${n} for ${a.id} (${a.status}): medical report received. The billing statement will follow.`),
+        audit: audit('Submitted medical report', a.id,
+          `File: ${a.report} · Clinic visit ${n} · Status: ${a.status} · Patient: ${e.name} · Sent to ${agencyName(s, e.agencyId)}`),
       };
     }
 
+    // The billing statement of a visit, sent after the medical report.
+    // It appears in the timeline as its own entry, at the time it was sent.
     case 'sendBilling': {
       const e = find(a.id);
+      const contact = s.agencies.find((g) => g.id === e.agencyId).billing;
       return {
         ...s,
         endorsements: patch(a.id, (x) => ({
           ...x,
-          timeline: [...x.timeline, { label: 'Billing statement sent', ms: now, file: a.file, kind: 'billing' }],
-          billing: { ...x.billing, state: 'sent', file: a.file, sentMs: now },
+          timeline: [
+            ...x.timeline.map((t) =>
+              (t.kind === 'visit' && t.n === a.n ? { ...t, billing: a.file, billingMs: now, billingBy: me.name } : t)),
+            { kind: 'billing', n: a.n, label: `Billing statement for clinic visit ${a.n}`, ms: now, file: a.file, by: me.name },
+          ],
         })),
-        alerts: alert(s.alerts, `agency:${e.agencyId}`, `Billing statement received for ${a.id}.`),
-        audit: audit('Sent billing', a.id),
+        alerts: alert(s.alerts, `agency:${e.agencyId}`, `Billing statement for clinic visit ${a.n} received (${a.id}).`),
+        audit: audit('Submitted billing statement', a.id,
+          `File: ${a.file} · Clinic visit ${a.n} · Patient: ${e.name} · Sent to ${contact.name}, ${agencyName(s, e.agencyId)}`),
       };
     }
 
     case 'logView':
-      return { ...s, audit: audit('Viewed', a.id) };
+      return { ...s, audit: audit('Viewed record', a.id, `Patient: ${find(a.id)?.name}`) };
 
     case 'breakGlass': {
       const minutes = s.policy.breakGlassMinutes;
@@ -330,7 +405,7 @@ function reducer(s, a) {
           ...s.breakGlass,
         ],
         alerts: alert(s.alerts, 'admin', `Break-glass request by ${me.name} on ${a.id}.`),
-        audit: audit('Break-glass', a.id, `Reason: ${a.reason} · ${a.note}`),
+        audit: audit('Break-glass', a.id, `Patient: ${find(a.id)?.name} · Reason: ${a.reason} · ${a.note}`),
       };
     }
 
@@ -342,29 +417,41 @@ function reducer(s, a) {
         audit: audit(a.status === 'Flagged' ? 'Flagged break-glass' : 'Reviewed break-glass', s.breakGlass.find((b) => b.id === a.id)?.ref, a.note || undefined),
       };
 
+    // Approve, reject, suspend or reactivate an agency. Reject and suspend carry a reason.
     case 'agencyStatus':
       return {
         ...s,
-        agencies: s.agencies.map((g) => (g.id === a.id ? { ...g, status: a.status, rejectReason: a.reason } : g)),
-        audit: audit(`Agency ${a.verb}`, '—', `${agencyName(s, a.id)}${a.reason ? ` · ${a.reason}` : ''}`),
+        agencies: s.agencies.map((g) => (g.id === a.id ? { ...g, status: a.status, statusReason: a.reason || null } : g)),
+        audit: audit(`Agency ${a.verb}`, '—', `${agencyName(s, a.id)}${a.reason ? ` · Reason: ${a.reason}` : ''}`),
       };
 
+    // The admin creates clinic accounts directly; there is no self-registration for staff.
     case 'addUser':
       return {
         ...s,
-        users: [...s.users, { id: `u${s.users.length + 1}`, name: a.name, role: a.role, status: 'Invited' }],
-        audit: audit('Invited staff', '—', `${a.name} · ${a.role}`),
+        users: [
+          ...s.users,
+          {
+            id: `u${s.users.length + 1}`, name: a.name, username: a.username, password: a.password,
+            role: a.role, duty: a.role === 'Clinic Staff' ? a.duty : null, status: 'Active',
+          },
+        ],
+        audit: audit('Created account', '—', `${a.name} · ${a.role}${a.role === 'Clinic Staff' ? ` · ${a.duty}` : ''}`),
       };
 
     case 'setUser':
       return {
         ...s,
         users: s.users.map((u) => (u.id === a.id ? { ...u, ...a.patch } : u)),
-        audit: audit(a.verb, '—', s.users.find((u) => u.id === a.id)?.name),
+        audit: audit(a.verb, '—', `${userName(a.id)}${a.note ? ` · ${a.note}` : ''}`),
       };
 
     case 'resetUser':
-      return { ...s, audit: audit('Reset access', '—', s.users.find((u) => u.id === a.id)?.name) };
+      return {
+        ...s,
+        users: s.users.map((u) => (u.id === a.id ? { ...u, password: a.password } : u)),
+        audit: audit('Reset password', '—', userName(a.id)),
+      };
 
     case 'savePolicy':
       return { ...s, policy: a.policy, audit: audit('Updated access policy') };

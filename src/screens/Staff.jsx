@@ -1,9 +1,14 @@
-// Clinic staff side (S1–S21).
+// Clinic staff side.
+// Staff accounts are role-based: "Endorsements and updates", "Billing", or "Both".
 import { useState } from 'react';
 import {
-  useStore, STATUSES, IN_PROGRESS, UPDATE_STATUSES, agencyName, dayOf, stamp, hasBreakGlass,
+  useStore, STATUSES, IN_PROGRESS, UPDATE_STATUSES, agencyName, dayOf, stamp, fmtDate,
+  hasBreakGlass, can, visitsOf, billingItems, billingDue, daysLeft,
 } from '../store.jsx';
-import { Shell, Chip, Field, FilePick, Paged, Rows, useNav } from '../ui.jsx';
+import {
+  Shell, Intro, Card, Chip, Field, Select, FilePick, FileRow, Paged, Table, Stat, Details, Note, Icon, Modal, useNav,
+} from '../ui.jsx';
+import { Person } from './Shared.jsx';
 
 /** Network banner with the prototype's "Demo: switch" control. */
 function NetBanner() {
@@ -11,14 +16,28 @@ function NetBanner() {
   const inside = state.insideNetwork;
   return (
     <div className={`note banner ${inside ? 'teal' : 'amber'}`}>
-      <span>{inside ? '📶 On clinic Wi‑Fi · full access' : '📵 Outside clinic network · limited view'}</span>
+      <Icon name={inside ? 'wifi' : 'lock'} size={16} />
+      <div>
+        {inside ? 'On clinic Wi‑Fi: full access to patient details.' : 'Outside clinic network: limited view of patient details.'}
+      </div>
       <button className="btn sm" onClick={() => dispatch({ type: 'toggleNetwork' })}>Demo: switch</button>
     </div>
   );
 }
 
+/** Shown when a staff account opens a page outside its assigned work. */
+function NoAccess({ title, tab, need }) {
+  return (
+    <Shell title={title} tab={tab}>
+      <Note tone="amber" icon="lock" title="Not part of your role">
+        This page is for staff assigned to {need}. Ask the clinic admin if your assignment should change.
+      </Note>
+    </Shell>
+  );
+}
+
 /** Search + agency + date filters shared by the staff lists. */
-function useListFilter(list) {
+function useListFilter(list, extra) {
   const { state } = useStore();
   const [q, setQ] = useState('');
   const [agency, setAgency] = useState('');
@@ -33,27 +52,33 @@ function useListFilter(list) {
         `${e.name} ${e.ref} ${e.vessel} ${e.position} ${agencyName(state, e.agencyId)}`.toLowerCase().includes(needle)),
   );
   const ui = (
-    <>
-      <Field label="Search">
-        <input type="search" value={q} placeholder="Search name, ref, agency, ship, position" onChange={(ev) => setQ(ev.target.value)} />
+    <div className="toolbar">
+      <Field label="Search" className="grow">
+        <input type="search" value={q} placeholder="Search name, reference, agency, ship or position" onChange={(ev) => setQ(ev.target.value)} />
       </Field>
-      <div className="two">
-        <Field label="Agency">
-          <select value={agency} onChange={(ev) => setAgency(ev.target.value)}>
-            <option value="">All agencies</option>
-            {state.agencies.filter((a) => a.status === 'Active').map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Date received">
-          <select value={day} onChange={(ev) => setDay(ev.target.value)}>
-            <option value="">All dates</option>
-            {days.map((d) => <option key={d}>{d}</option>)}
-          </select>
-        </Field>
-      </div>
-    </>
+      {extra}
+      <Field label="Agency">
+        <Select
+          searchable
+          clearable
+          value={agency}
+          onChange={setAgency}
+          options={[
+            { value: '', label: 'All agencies' },
+            ...state.agencies.filter((a) => a.status === 'Active').map((a) => ({ value: a.id, label: a.name })),
+          ]}
+        />
+      </Field>
+      <Field label="Date received">
+        <Select
+          searchable
+          clearable
+          value={day}
+          onChange={setDay}
+          options={[{ value: '', label: 'All dates' }, ...days]}
+        />
+      </Field>
+    </div>
   );
   return [out, ui, `${needle}:${agency}:${day}`];
 }
@@ -62,53 +87,78 @@ function useListFilter(list) {
 function useOpenPatient() {
   const { state, dispatch } = useStore();
   const { nav } = useNav();
+  const full = (id) => state.insideNetwork || hasBreakGlass(state, id);
   return {
     open: (id) => {
       dispatch({ type: 'logView', id });
       nav('s.patient', { id });
     },
-    label: (id) => (state.insideNetwork || hasBreakGlass(state, id) ? 'Full record' : '🔒 Limited view'),
+    label: (id) => (full(id) ? 'Full record' : 'Limited view'),
+    icon: (id) => (full(id) ? 'file' : 'lock'),
   };
 }
 
-/** S1 Dashboard */
+function ViewButton({ id, patient }) {
+  return (
+    <button className="btn sm" onClick={() => patient.open(id)}>
+      <Icon name={patient.icon(id)} size={14} /> {patient.label(id)}
+    </button>
+  );
+}
+
+/** Dashboard: what needs action first, then patients by status. */
 export function Dashboard() {
   const { state } = useStore();
   const { nav, reset } = useNav();
-  const count = (s) => state.endorsements.filter((e) => e.status === s).length;
-  const billing = state.endorsements.filter((e) => e.billing.state === 'toSend').length;
+  const all = state.endorsements;
+  const count = (s) => all.filter((e) => e.status === s).length;
+  // Clinic visits that were recorded without their billing statement.
+  const billing = billingItems(state).filter((i) => !i.v.billing);
+  const billingLate = billing.filter((i) => daysLeft(billingDue(i.v)) < 0).length;
+  const updates = can(state.session, 'updates');
+  const bills = can(state.session, 'billing');
   const tiles = [
-    ['Accepted', 'c-slate'], ['Treatment in Progress', 'c-teal'],
-    ['Non-reporting Status', 'c-amber'], ['Expired', 'c-red'],
-    ['Stop Treatment', 'c-slate'], ['Reach Maximum Medical Improvement', 'c-slate'],
-    ['Fit to Work', 'c-green'], ['Fit to Work with Disability', 'c-green'],
+    ['Accepted', 'slate'], ['Treatment in Progress', 'teal'],
+    ['Non-reporting Status', 'amber'], ['Expired', 'red'],
+    ['Stop Treatment', 'slate'], ['Reach Maximum Medical Improvement', 'slate'],
+    ['Fit to Work', 'green'], ['Fit to Work with Disability', 'green'],
   ];
 
   return (
     <Shell title="Dashboard" tab="s.dash">
-      <h2>Patients at a glance</h2>
-      <div className="stats two-col">
-        <button className="stat row edge" onClick={() => reset('s.queue')}>
-          <strong className="c-amber">{count('Pending')}</strong>
-          <small>New endorsements ›</small>
-        </button>
-        <button className="stat row edge-teal" onClick={() => reset('s.billing')}>
-          <strong className="c-teal">{billing}</strong>
-          <small>Billing to send ›</small>
-        </button>
-        {tiles.map(([s, tone]) => (
-          <button key={s} className="stat row" onClick={() => nav('s.patients', { status: s })}>
-            <strong className={tone}>{count(s)}</strong>
-            <small>{s} ›</small>
-          </button>
-        ))}
+      <Intro title="Patients at a glance" sub={`Signed in as ${state.session.name}. Assigned to: ${state.session.duty}`}>
+        <button className="btn" onClick={() => nav('s.patients', {})}>All patients</button>
+      </Intro>
+
+      <div className="section-h"><h3>Needs action</h3></div>
+      <div className="stats">
+        {updates && (
+          <Stat solid tone="amber" icon="inbox" value={count('Pending')} label="New endorsements" onClick={() => reset('s.queue')} />
+        )}
+        {updates && (
+          <Stat solid tone="blue" icon="mail" value={all.filter((e) => e.updateRequested).length} label="Updates requested" onClick={() => reset('s.active')} />
+        )}
+        {bills && (
+          <Stat solid tone="teal" icon="receipt" value={billing.length} label="Visits awaiting billing" onClick={() => reset('s.billing')} />
+        )}
+        {bills && (
+          <Stat solid tone="red" icon="alert" value={billingLate} label="Billing past 30 days" onClick={() => reset('s.billing')} />
+        )}
       </div>
-      <button className="btn block" onClick={() => nav('s.patients', {})}>All patients</button>
+
+      <div className="section">
+        <div className="section-h"><h3>Patients by status</h3><p>Select a status to list its patients.</p></div>
+        <div className="stats">
+          {tiles.map(([s, tone]) => (
+            <Stat key={s} tone={tone} value={count(s)} label={s} onClick={() => nav('s.patients', { status: s })} />
+          ))}
+        </div>
+      </div>
     </Shell>
   );
 }
 
-/** S2–S3 Review queue, S6 accept on a cash basis */
+/** Review queue: accept new endorsements, optionally on a cash basis. */
 export function Queue() {
   const { state, dispatch } = useStore();
   const { toast } = useNav();
@@ -116,6 +166,10 @@ export function Queue() {
   const [cashFor, setCashFor] = useState(null);
   const pending = state.endorsements.filter((e) => e.status === 'Pending');
   const [list, filters, key] = useListFilter(pending);
+
+  if (!can(state.session, 'updates')) {
+    return <NoAccess title="Review queue" tab="s.queue" need="endorsements and updates" />;
+  }
 
   const accept = (e, cash) => {
     dispatch({ type: 'accept', id: e.ref, cash });
@@ -125,229 +179,348 @@ export function Queue() {
 
   return (
     <Shell title="Review queue" tab="s.queue">
+      <Intro title="New endorsements" sub="Check the referral letter, then accept the endorsement." />
       <NetBanner />
-      <h2>New endorsements</h2>
       {filters}
       <Paged
         key={key}
         items={list}
-        empty="No endorsements waiting for review."
+        empty="No endorsements are waiting for review."
         render={(e) => (
-          <div className="card" key={e.ref}>
-            <div className="over">{agencyName(state, e.agencyId)}</div>
-            <b>{e.name}</b>
-            <div className="meta">{e.ref} · Received {stamp(e.receivedMs)}</div>
-            <div className="chips"><Chip>Pending</Chip></div>
-            {cashFor === e.ref ? (
-              <>
-                <div className="note amber">
-                  <b>Accept {e.name} on a cash basis?</b>
-                  Self pay.
-                </div>
-                <div className="btn-row">
-                  <button className="btn primary" onClick={() => accept(e, true)}>Confirm cash basis</button>
-                  <button className="btn" onClick={() => setCashFor(null)}>Cancel</button>
-                </div>
-              </>
-            ) : (
-              <div className="btn-row">
-                <button className="btn primary" onClick={() => accept(e, false)}>Accept</button>
-                <button className="btn" onClick={() => setCashFor(e.ref)}>Cash basis</button>
+          <Card key={e.ref} className="rec">
+            <div className="rec-h">
+              <div>
+                <div className="card-name">{e.name}</div>
+                <div className="meta">{agencyName(state, e.agencyId)}</div>
               </div>
-            )}
-            <button className="btn block" onClick={() => patient.open(e.ref)}>{patient.label(e.ref)}</button>
-          </div>
+              <Chip>Pending</Chip>
+            </div>
+            <Details
+              compact
+              cols
+              items={[
+                ['Reference', e.ref],
+                ['Received', stamp(e.receivedMs)],
+                ['Can come to the clinic', fmtDate(e.visitDate)],
+                ['Case', e.case],
+              ]}
+            />
+            <FileRow label="Referral letter" file={e.referral} />
+            <div className="rec-f">
+              <button className="btn primary sm" onClick={() => accept(e, false)}>Accept</button>
+              <button className="btn sm" onClick={() => setCashFor(e)}>Cash basis</button>
+              <ViewButton id={e.ref} patient={patient} />
+            </div>
+          </Card>
         )}
       />
+
+      {cashFor && (
+        <Modal
+          title={`Accept ${cashFor.name} on a cash basis?`}
+          sub={`${cashFor.ref}, ${agencyName(state, cashFor.agencyId)}`}
+          onClose={() => setCashFor(null)}
+          footer={(
+            <>
+              <button className="btn" onClick={() => setCashFor(null)}>Cancel</button>
+              <button className="btn primary" onClick={() => accept(cashFor, true)}>Confirm cash basis</button>
+            </>
+          )}
+        >
+          <p>Cash basis means the patient pays the clinic directly (self pay). The agency is notified.</p>
+        </Modal>
+      )}
     </Shell>
   );
 }
 
-/** One active case with the status + medical report update form (S7–S9). */
-function ActiveCard({ e }) {
-  const { state, dispatch } = useStore();
-  const { nav, toast } = useNav();
-  const patient = useOpenPatient();
-  const [open, setOpen] = useState(e.updateRequested);
+/**
+ * Dialog for recording a clinic visit.
+ * A visit sets the new status and sends its medical report. A status can only
+ * change by recording a visit. The billing statement is sent later from Billing.
+ */
+function VisitDialog({ e, onClose }) {
+  const { dispatch } = useStore();
+  const { toast } = useNav();
   const [status, setStatus] = useState(UPDATE_STATUSES.includes(e.status) ? e.status : 'Treatment in Progress');
-  const [file, setFile] = useState('');
+  const [report, setReport] = useState('');
   const [error, setError] = useState('');
-  const last = e.timeline[e.timeline.length - 1];
-  const showForm = open || e.updateRequested;
+  const next = visitsOf(e).length + 1;
 
   const send = () => {
-    if (!file) return setError('Attach the medical report before sending the update.');
-    dispatch({ type: 'sendUpdate', id: e.ref, status, file });
-    setFile('');
-    setError('');
-    setOpen(false);
-    return toast('Update sent · agency notified');
+    if (!report) return setError('Attach the medical report for this visit.');
+    dispatch({ type: 'recordVisit', id: e.ref, status, report });
+    toast(`Clinic visit ${next} recorded · agency notified`);
+    return onClose();
   };
 
   return (
-    <div className="card">
-      <div className="over">{agencyName(state, e.agencyId)}</div>
-      <b>{e.name}</b>
-      <div className="meta">{e.ref} · Received {stamp(e.receivedMs)}</div>
-      <div className="meta">Last update: {last.label} · {stamp(last.ms)}</div>
-      <div className="chips">
-        {e.updateRequested && <Chip>Update requested</Chip>}
-        {e.cashBasis && <Chip>Cash basis</Chip>}
-        <Chip>{e.status}</Chip>
-      </div>
-
-      {showForm ? (
+    <Modal
+      title={`Clinic visit ${next}`}
+      sub={`${e.name}, ${e.ref}`}
+      onClose={onClose}
+      footer={(
         <>
-          {e.updateRequested && <div className="note amber">📩 Update requested by the agency</div>}
-          <Field label="Update status">
-            <select value={status} onChange={(ev) => setStatus(ev.target.value)}>
-              {UPDATE_STATUSES.map((s) => <option key={s}>{s}</option>)}
-            </select>
-          </Field>
-          <div className="meta">Medical report (PDF) *</div>
-          <FilePick file={file} onPick={(n) => { setFile(n); setError(''); }} onRemove={() => setFile('')} />
-          {error && <p className="err">{error}</p>}
-          <button className="btn primary block" onClick={send}>Send update</button>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn primary" onClick={send}>Send visit update</button>
         </>
-      ) : (
-        <button className="btn primary block" onClick={() => setOpen(true)}>Update status</button>
       )}
-      <div className="btn-row">
-        <button className="btn" onClick={() => nav('timeline', { id: e.ref })}>Timeline</button>
-        <button className="btn" onClick={() => patient.open(e.ref)}>{patient.label(e.ref)}</button>
+    >
+      <div className="visit-form form">
+        <p className="meta">A visit sets the new status and sends its medical report to the agency.</p>
+        {e.updateRequested && <Note tone="amber" icon="mail">The agency requested a medical update for this patient.</Note>}
+        <Field label="Status for this visit">
+          <Select value={status} onChange={setStatus} options={UPDATE_STATUSES} />
+        </Field>
+        <div className="field">
+          <label><span>Medical report (PDF) *</span></label>
+          <FilePick file={report} empty="No medical report" onPick={(n) => { setReport(n); setError(''); }} onRemove={() => setReport('')} />
+          {error && <p className="err">{error}</p>}
+        </div>
+        <Note tone="teal" icon="receipt">
+          The billing statement for this visit is sent later from the Billing page, within 30 days.
+        </Note>
       </div>
-    </div>
+    </Modal>
   );
 }
 
-/** S4–S5 Active cases */
+/** Active cases: record a clinic visit each time the patient comes in. */
 export function Active() {
   const { state } = useStore();
+  const { nav } = useNav();
+  const patient = useOpenPatient();
+  const [visitFor, setVisitFor] = useState(null);
+  // Agency requests first, then patients who have not come in yet, then the rest.
+  const rank = (e) => (e.updateRequested ? 0 : visitsOf(e).length ? 2 : 1);
   const active = state.endorsements
     .filter((e) => IN_PROGRESS.includes(e.status))
-    .sort((a, b) => Number(b.updateRequested) - Number(a.updateRequested));
+    .sort((a, b) => rank(a) - rank(b) || b.receivedMs - a.receivedMs);
   const [list, filters, key] = useListFilter(active);
+
+  if (!can(state.session, 'updates')) {
+    return <NoAccess title="Active patients" tab="s.active" need="endorsements and updates" />;
+  }
 
   return (
     <Shell title="Active patients" tab="s.active">
+      <Intro
+        title="Active patients"
+        sub="Record a clinic visit each time the patient comes in. Each visit sets a status and sends its medical report; billing follows separately."
+      />
       <NetBanner />
-      <h2>Needs updates</h2>
       {filters}
-      <Paged key={key} items={list} empty="No active cases." render={(e) => <ActiveCard key={e.ref} e={e} />} />
+      <Paged
+        key={key}
+        items={list}
+        empty="No active cases."
+        render={(e) => {
+          const visits = visitsOf(e);
+          const last = visits[visits.length - 1];
+          return (
+            <Card key={e.ref} className={`rec${e.updateRequested ? ' flag' : ''}`}>
+              <div className="rec-h">
+                <div>
+                  <div className="card-name">{e.name}</div>
+                  <div className="meta">{agencyName(state, e.agencyId)}</div>
+                </div>
+                <div className="chips">
+                  {e.updateRequested && <Chip>Update requested</Chip>}
+                  {e.cashBasis && <Chip>Cash basis</Chip>}
+                  <Chip>{e.status}</Chip>
+                </div>
+              </div>
+              <Details
+                compact
+                cols
+                items={[
+                  ['Reference', e.ref],
+                  ['Received', stamp(e.receivedMs)],
+                  ['Clinic visits', last ? String(visits.length) : 'None yet'],
+                  [last ? 'Last visit' : 'Expected', last ? stamp(last.ms) : fmtDate(e.visitDate)],
+                ]}
+              />
+              <div className="rec-f">
+                <button className="btn primary sm" onClick={() => setVisitFor(e)}>Record clinic visit</button>
+                <button className="btn sm" onClick={() => nav('timeline', { id: e.ref })}>Timeline</button>
+                <ViewButton id={e.ref} patient={patient} />
+              </div>
+            </Card>
+          );
+        }}
+      />
+      {visitFor && <VisitDialog e={visitFor} onClose={() => setVisitFor(null)} />}
     </Shell>
   );
 }
 
-function BillingCard({ e }) {
+/** A clinic visit whose billing statement has not been attached yet. */
+function BillingCard({ e, v }) {
   const { state, dispatch } = useStore();
   const { toast } = useNav();
   const [file, setFile] = useState('');
   const [error, setError] = useState('');
   const contact = state.agencies.find((a) => a.id === e.agencyId).billing;
+  const due = billingDue(v);
+  const left = daysLeft(due);
 
   const send = () => {
     if (!file) return setError('Attach the billing statement before sending.');
-    dispatch({ type: 'sendBilling', id: e.ref, file });
-    return toast('Billing sent · agency notified');
+    dispatch({ type: 'sendBilling', id: e.ref, n: v.n, file });
+    return toast(`Billing for clinic visit ${v.n} sent · agency notified`);
   };
 
   return (
-    <div className="card">
-      <b>{e.name}</b>
-      <div className="meta">{agencyName(state, e.agencyId)}</div>
-      <div className="meta">{e.ref} · Report sent {stamp(e.billing.reportMs)}</div>
-      <div className="meta">Send to: {contact.name} · {contact.email}</div>
-      {e.cashBasis && <div className="chips"><Chip>Cash basis</Chip></div>}
-      <FilePick file={file} empty="No billing file" onPick={(n) => { setFile(n); setError(''); }} onRemove={() => setFile('')} />
+    <Card className={`rec${left < 0 ? ' flag-red' : ''}`}>
+      <div className="rec-h">
+        <div>
+          <div className="card-name">{e.name}</div>
+          <div className="meta">{agencyName(state, e.agencyId)}</div>
+          <div className="meta">{e.ref} · Clinic visit {v.n} · {v.label}</div>
+        </div>
+        <div className="chips">
+          {e.cashBasis && <Chip>Cash basis</Chip>}
+          {left < 0
+            ? <Chip tone="red">Overdue {-left}d</Chip>
+            : <Chip tone={left <= 7 ? 'amber' : 'slate'}>{left} day{left === 1 ? '' : 's'} left</Chip>}
+        </div>
+      </div>
+      <Details
+        compact
+        cols
+        items={[
+          ['Visit', `${stamp(v.ms)}, report by ${v.reportBy}`],
+          ['Send by', <span className={left < 0 ? 'c-red strong' : undefined}>{dayOf(due)}</span>],
+          ['Send to', contact.name],
+          ['Email', contact.email],
+        ]}
+      />
+      <div className="rec-f">
+        <FilePick file={file} empty="No billing statement" onPick={(n) => { setFile(n); setError(''); }} onRemove={() => setFile('')} />
+        <button className="btn primary sm" onClick={send}>Send billing</button>
+      </div>
       {error && <p className="err">{error}</p>}
-      <button className="btn primary block" onClick={send}>Send billing</button>
-    </div>
+    </Card>
   );
 }
 
-/** S10–S12 Billing */
+/** Billing: one billing statement per clinic visit, with search. */
 export function Billing() {
   const { state } = useStore();
-  const toSend = state.endorsements.filter((e) => e.billing.state === 'toSend');
-  const sent = state.endorsements
-    .filter((e) => e.billing.state === 'sent')
-    .sort((a, b) => b.billing.sentMs - a.billing.sentMs);
+  const [q, setQ] = useState('');
+  const needle = q.trim().toLowerCase();
+  const items = billingItems(state).filter(
+    ({ e, v }) =>
+      !needle ||
+      `${e.name} ${e.ref} ${e.vessel} ${agencyName(state, e.agencyId)} ${v.billing || ''}`.toLowerCase().includes(needle),
+  );
+  const toSend = items.filter((i) => !i.v.billing).sort((a, b) => a.v.ms - b.v.ms); // oldest visit first
+  const sent = items.filter((i) => i.v.billing).sort((a, b) => b.v.billingMs - a.v.billingMs);
+
+  if (!can(state.session, 'billing')) {
+    return <NoAccess title="Billing" tab="s.billing" need="billing" />;
+  }
 
   return (
     <Shell title="Billing" tab="s.billing">
-      <h2>Billing</h2>
-      <p className="sub">Sending a medical report creates a billing item here.</p>
-      <h3>To send ({toSend.length})</h3>
-      {toSend.length === 0 && <p className="empty">Nothing to send.</p>}
-      {toSend.map((e) => <BillingCard key={e.ref} e={e} />)}
-
-      <h3>Sent ({sent.length})</h3>
-      <Paged
-        items={sent}
-        empty="Nothing sent yet."
-        render={(e) => (
-          <div className="card" key={e.ref}>
-            <div className="card-head">
-              <b>{e.name}</b>
-              <Chip>Sent</Chip>
-            </div>
-            <div className="meta">{agencyName(state, e.agencyId)}</div>
-            <div className="meta">{e.ref} · {stamp(e.billing.sentMs)}</div>
-            <div className="meta">📄 {e.billing.file}</div>
-          </div>
-        )}
+      <Intro
+        title="Billing"
+        sub="Each clinic visit gets its own billing statement, sent after the medical report and within 30 days of the visit."
       />
+      <div className="toolbar">
+        <Field label="Search billing" className="grow">
+          <input type="search" value={q} placeholder="Search patient, reference, agency or vessel" onChange={(ev) => setQ(ev.target.value)} />
+        </Field>
+      </div>
+
+      <div className="section-h"><h3>Visits waiting for a billing statement ({toSend.length})</h3></div>
+      <Paged
+        key={`t:${needle}`}
+        items={toSend}
+        empty="Every visit has its billing statement."
+        render={({ e, v }) => <BillingCard key={`${e.ref}:${v.n}`} e={e} v={v} />}
+      />
+
+      <div className="section">
+        <div className="section-h"><h3>Sent ({sent.length})</h3></div>
+        <Card flush>
+          <Table
+            key={`s:${needle}`}
+            columns={[
+              { head: 'Patient', cell: ({ e }) => <><span className="strong">{e.name}</span><span className="meta">{agencyName(state, e.agencyId)}</span></> },
+              { head: 'Reference', cell: ({ e }) => e.ref, className: 'nowrap' },
+              { head: 'Clinic visit', cell: ({ v }) => `Visit ${v.n}, ${v.label}` },
+              { head: 'Sent', cell: ({ v }) => stamp(v.billingMs), className: 'nowrap' },
+              { head: 'Sent by', cell: ({ v }) => v.billingBy },
+              { head: 'Billing statement', cell: ({ v }) => v.billing },
+            ]}
+            rows={sent}
+            rowKey={({ e, v }) => `${e.ref}:${v.n}`}
+            empty="No sent billing matches."
+          />
+        </Card>
+      </div>
     </Shell>
   );
 }
 
-/** S13 All patients / case history, filterable by status */
+/** All patients, filterable by status. */
 export function Patients({ status = '' }) {
   const { state } = useStore();
   const { nav } = useNav();
   const patient = useOpenPatient();
   const [s, setS] = useState(status);
   const base = state.endorsements.filter((e) => !s || e.status === s);
-  const [list, filters, key] = useListFilter(base);
+  const [list, filters, key] = useListFilter(base, (
+    <Field label="Status">
+      <Select clearable value={s} onChange={setS} options={[{ value: '', label: 'All statuses' }, ...STATUSES]} />
+    </Field>
+  ));
 
   return (
     <Shell title="Patients" back tab="s.dash">
+      <Intro title={s || 'All patients'} sub="Open the timeline for clinic visits, or the record for patient details." />
       <NetBanner />
-      <h2>{s || 'All patients'}</h2>
-      <Field label="Status">
-        <select value={s} onChange={(ev) => setS(ev.target.value)}>
-          <option value="">All</option>
-          {STATUSES.map((x) => <option key={x}>{x}</option>)}
-        </select>
-      </Field>
       {filters}
-      <Paged
-        key={`${s}:${key}`}
-        items={list}
-        empty="No patients match."
-        render={(e) => (
-          <div className="card" key={e.ref}>
-            <div className="over">{agencyName(state, e.agencyId)}</div>
-            <b>{e.name}</b>
-            <div className="meta">{e.ref} · Received {stamp(e.receivedMs)}</div>
-            <div className="chips">
-              {e.cashBasis && <Chip>Cash basis</Chip>}
-              <Chip>{e.status}</Chip>
-            </div>
-            <div className="btn-row">
-              <button className="btn" onClick={() => nav('timeline', { id: e.ref })}>Timeline</button>
-              <button className="btn" onClick={() => patient.open(e.ref)}>{patient.label(e.ref)}</button>
-            </div>
-          </div>
-        )}
-      />
+      <Card flush>
+        <Table
+          key={`${s}:${key}`}
+          columns={[
+            { head: 'Patient', cell: (e) => <Person e={e} /> },
+            { head: 'Manning agency', cell: (e) => agencyName(state, e.agencyId) },
+            { head: 'Reference', cell: (e) => e.ref, className: 'nowrap' },
+            { head: 'Received', cell: (e) => stamp(e.receivedMs), className: 'nowrap' },
+            {
+              head: 'Status',
+              cell: (e) => (
+                <div className="chips">
+                  <Chip>{e.status}</Chip>
+                  {e.cashBasis && <Chip>Cash basis</Chip>}
+                </div>
+              ),
+            },
+            {
+              head: '', stop: true, className: 'right',
+              cell: (e) => (
+                <div className="actions">
+                  <button className="btn sm" onClick={() => nav('timeline', { id: e.ref })}>Timeline</button>
+                  <ViewButton id={e.ref} patient={patient} />
+                </div>
+              ),
+            },
+          ]}
+          rows={list}
+          rowKey={(e) => e.ref}
+          empty="No patients match."
+        />
+      </Card>
     </Shell>
   );
 }
 
-const DETAIL_LABELS = ['Contact', 'Email', 'Birthday / age', 'Address', 'Position', 'Vessel', 'Agent', 'Date of repatriation'];
+const DETAIL_LABELS = ['Contact', 'Email', 'Birthday / age', 'Address', 'Position', 'Vessel', 'Agent', 'Date of repatriation', 'Referral letter'];
 
-/** S14–S15 limited view (outside the network), S17–S18 full record (inside) */
+/** Patient overview: limited outside the clinic network, full inside or with break-glass. */
 export function PatientOverview({ id }) {
   const { state } = useStore();
   const { nav } = useNav();
@@ -357,59 +530,74 @@ export function PatientOverview({ id }) {
   );
   const full = state.insideNetwork || !!grant;
   const agent = agencyName(state, e.agencyId);
-  const birthday = new Date(e.birthday).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const repatriation = new Date(e.repatriation).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const visits = visitsOf(e);
 
   return (
     <Shell title="Patient overview" back tab="s.dash">
+      <Intro title={e.name} sub={`${e.ref}, ${agent}`}>
+        {!full && (
+          <button className="btn primary" onClick={() => nav('s.breakglass', { id })}>
+            <Icon name="lock" size={16} /> Request more access
+          </button>
+        )}
+        <button className="btn" onClick={() => nav('timeline', { id })}>Timeline</button>
+      </Intro>
       <NetBanner />
-      <div className="note teal">
-        {state.insideNetwork
-          ? 'Full record'
-          : grant
-            ? `Break-glass access active until ${new Date(grant.expires).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} · logged`
-            : '🔒 Your access is logged.'}
-      </div>
-      <div className="card">
-        <b style={{ fontSize: 17 }}>{e.name}</b>
-        <Rows items={[['Status', e.status], ['Manning agency', agent], ['Case', e.case]]} />
-      </div>
-      <div className="card">
-        {full ? (
-          <Rows
+      <div className="split aside-left">
+        <Card title="Case" action={<Chip>{e.status}</Chip>}>
+          <Details
             items={[
-              ['Contact', `${e.name} · ${e.contact}`],
-              ['Email', e.email],
-              ['Birthday / age', `${birthday} · ${e.age}`],
-              ['Address', e.address],
-              ['Position', e.position],
-              ['Vessel', e.vessel],
-              ['Agent', agent],
-              ['Date of repatriation', repatriation],
+              ['Status', e.status],
+              ['Manning agency', agent],
+              ['Case', e.case],
+              ['Clinic visits', visits.length
+                ? `${visits.length}, last on ${stamp(visits[visits.length - 1].ms)}`
+                : `None yet, expected ${fmtDate(e.visitDate)}`],
             ]}
           />
-        ) : (
-          <div className="rows locked">
-            {DETAIL_LABELS.map((l) => (
-              <div key={l}>
-                <span>{l}</span>
-                <b>🔒 Restricted</b>
-              </div>
-            ))}
-          </div>
-        )}
+        </Card>
+        <Card
+          title="Patient details"
+          sub={state.insideNetwork
+            ? 'Full record'
+            : grant
+              ? `Break-glass access active until ${new Date(grant.expires).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}. Your access is logged.`
+              : 'Restricted outside the clinic network. Your access is logged.'}
+        >
+          {full ? (
+            <Details
+              cols
+              items={[
+                ['Contact', `${e.name}, ${e.contact}`],
+                ['Email', e.email],
+                ['Birthday / age', `${fmtDate(e.birthday)} (${e.age})`],
+                ['Address', e.address],
+                ['Position', e.position],
+                ['Vessel', e.vessel],
+                ['Agent', agent],
+                ['Date of repatriation', fmtDate(e.repatriation)],
+                ['Referral letter', e.referral],
+              ]}
+            />
+          ) : (
+            <dl className="dl cols">
+              {DETAIL_LABELS.map((l) => (
+                <div className="locked" key={l}>
+                  <dt>{l}</dt>
+                  <dd><Icon name="lock" size={14} /> Restricted</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </Card>
       </div>
-      {!full && (
-        <button className="btn primary block" onClick={() => nav('s.breakglass', { id })}>Request more access</button>
-      )}
-      <button className="btn block" onClick={() => nav('timeline', { id })}>Timeline</button>
     </Shell>
   );
 }
 
 const REASONS = ['Urgent hospital confirmation', 'Emergency contact needed', 'Agency verification call', 'Other'];
 
-/** S16 Break-glass access */
+/** Break-glass access request. */
 export function BreakGlass({ id }) {
   const { state, dispatch } = useStore();
   const { back, toast } = useNav();
@@ -428,18 +616,24 @@ export function BreakGlass({ id }) {
 
   return (
     <Shell title="Break-glass access" back tab="s.dash">
-      <div className="note amber"><b>Access lasts {minutes} minutes</b>The request is logged and the admin is notified.</div>
-      <p className="hint">For {e.name} · {e.ref}</p>
-      <Field label="Reason *">
-        <select value={reason} onChange={(ev) => setReason(ev.target.value)}>
-          {REASONS.map((r) => <option key={r}>{r}</option>)}
-        </select>
-      </Field>
-      <Field label="Supporting note *" error={error}>
-        <textarea value={note} placeholder="Add a justification" onChange={(ev) => { setNote(ev.target.value); setError(''); }} />
-      </Field>
-      <button className="btn primary block" onClick={confirm}>Confirm {minutes}-minute access</button>
-      <button className="btn block" onClick={back}>Cancel</button>
+      <Intro title="Request full access" sub={`For ${e.name}, ${e.ref}`} />
+      <Card className="narrow">
+        <div className="form">
+          <Note tone="amber" icon="alert" title={`Access lasts ${minutes} minutes`}>
+            The request is logged and the clinic admin is notified.
+          </Note>
+          <Field label="Reason *">
+            <Select value={reason} onChange={setReason} options={REASONS} />
+          </Field>
+          <Field label="Supporting note *" error={error}>
+            <textarea value={note} placeholder="Add a justification" onChange={(ev) => { setNote(ev.target.value); setError(''); }} />
+          </Field>
+        </div>
+        <div className="card-foot">
+          <button className="btn primary" onClick={confirm}>Confirm {minutes}-minute access</button>
+          <button className="btn" onClick={back}>Cancel</button>
+        </div>
+      </Card>
     </Shell>
   );
 }

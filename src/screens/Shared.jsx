@@ -1,35 +1,24 @@
 // Screens used by more than one role: status timeline, alerts, profile.
 import { useState } from 'react';
-import { useStore, myAlerts, stamp, isClosed, agencyName, ROLE_LABEL } from '../store.jsx';
-import { Shell, Chip, Field, Rows, useNav } from '../ui.jsx';
+import { useStore, myAlerts, stamp, fmtDate, isClosed, visitsOf, agencyName, ROLE_LABEL } from '../store.jsx';
+import { Shell, Intro, Card, Chip, Field, Details, FileRow, Note, Empty, Icon, Modal, useNav } from '../ui.jsx';
 
-/** Compact endorsement card used in most lists. */
-export function EndorsementCard({ e, onClick, agency, extra }) {
+/** Seafarer name with position and vessel underneath (first column of most tables). */
+export function Person({ e }) {
   return (
-    <button className="card tap" onClick={onClick}>
-      <div className="card-head">
-        <div>
-          {agency && <div className="over">{agency}</div>}
-          <b>{e.name}</b>
-        </div>
-        <Chip>{e.status}</Chip>
-      </div>
-      <div className="meta">{e.position} · {e.vessel}</div>
-      <div className="meta">
-        {e.ref} · {stamp(e.receivedMs)}
-        {extra}
-      </div>
-    </button>
+    <>
+      <span className="strong">{e.name}</span>
+      <span className="meta">{e.position}, {e.vessel}</span>
+    </>
   );
 }
 
 const HOME_TAB = { agency: 'm.list', staff: 's.active', admin: 'a.overview' };
 
-/** Status timeline (M8–M12 for agencies, S19 for clinic users). */
+/** Status timeline: case summary on the left, clinic visits on the right. */
 export function Timeline({ id }) {
   const { state, dispatch } = useStore();
   const { toast } = useNav();
-  const [confirming, setConfirming] = useState(false);
   const { role, agencyId } = state.session;
   const e = state.endorsements.find((x) => x.ref === id);
 
@@ -37,7 +26,7 @@ export function Timeline({ id }) {
   if (!e || (role === 'agency' && e.agencyId !== agencyId)) {
     return (
       <Shell title="Status timeline" back tab={HOME_TAB[role]}>
-        <p className="empty">Record not found.</p>
+        <Card><Empty text="Record not found." /></Card>
       </Shell>
     );
   }
@@ -45,129 +34,151 @@ export function Timeline({ id }) {
   const items = [...e.timeline].reverse(); // newest first
   const latest = items[0];
   const closed = isClosed(e);
+  const visits = visitsOf(e);
+  const lastVisit = visits[visits.length - 1];
+
+  const request = () => {
+    dispatch({ type: 'requestUpdate', id });
+    toast('The clinic has been notified.');
+  };
 
   return (
     <Shell title="Status timeline" back tab={HOME_TAB[role]}>
-      <div className="card">
-        <div className="over">{e.ref}</div>
-        <b style={{ fontSize: 17 }}>{e.name}</b>
-        <div className="meta">{e.position} · {e.vessel}</div>
-        <div className="chips">
-          <Chip>{e.status}</Chip>
-          {e.cashBasis && <Chip>Cash basis</Chip>}
-        </div>
-      </div>
-
-      <h3>Updates from the clinic</h3>
-      <ul className="tl">
-        {items.map((t, i) => (
-          <li key={i}>
-            <b>{t.label}</b>
-            <small>{stamp(t.ms)}</small>
-            {t.file && (
-              <div className="file">
-                📄 {t.file}
-                <br />
-                <button className="link" onClick={() => toast(`${t.file} is a demo file`)}>
-                  View {t.kind === 'billing' ? 'billing statement' : 'medical report'}
-                </button>
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
-
-      <div className="note teal">
-        <b>Latest authorized update</b>
-        {latest.label}
-        {latest.file ? ' · file attached' : ''}
-      </div>
-      <p className="hint">Reports arrive as files from the clinic.</p>
-
-      {closed && (
-        <div className="note teal">
-          <b>Case closed.</b>
-          Final status: {e.status}. No further updates. The final medical report is in the timeline above.
-        </div>
-      )}
-
-      {role === 'agency' && e.status === 'Pending' && (
-        <div className="note amber">Waiting for the clinic to review this endorsement.</div>
-      )}
-
-      {role === 'agency' && !closed && e.status !== 'Pending' && (
-        e.updateRequested ? (
-          <div className="note amber">
-            <b>Medical update requested.</b>
-            The clinic will send the report, then a billing statement follows.
-          </div>
-        ) : confirming ? (
-          <>
-            <div className="note amber">
-              <b>Request a medical update?</b>
-              The clinic sends the medical report, then a billing statement goes to your medical report and
-              billing contact.
+      <div className="split aside-left">
+        <div className="stack">
+          <Card>
+            <div className="over">{e.ref}</div>
+            <div className="card-name">{e.name}</div>
+            <div className="meta">{e.position}, {e.vessel}</div>
+            <div className="chips" style={{ margin: '12px 0 16px' }}>
+              <Chip>{e.status}</Chip>
+              {e.cashBasis && <Chip>Cash basis</Chip>}
             </div>
-            <div className="btn-row">
-              <button
-                className="btn primary"
-                onClick={() => {
-                  dispatch({ type: 'requestUpdate', id });
-                  setConfirming(false);
-                  toast('Update request sent to the clinic');
-                }}
-              >
-                Confirm request
-              </button>
-              <button className="btn" onClick={() => setConfirming(false)}>Cancel</button>
+            <Details
+              items={[
+                ...(role !== 'agency' ? [['Manning agency', agencyName(state, e.agencyId)]] : []),
+                ['Can come to the clinic', fmtDate(e.visitDate)],
+                ['Clinic visits', lastVisit ? `${visits.length}, last on ${stamp(lastVisit.ms)}` : 'None yet'],
+              ]}
+            />
+            <div style={{ marginTop: 16 }}>
+              <FileRow label="Referral letter" file={e.referral} />
             </div>
-          </>
-        ) : (
-          <button className="btn primary block" onClick={() => setConfirming(true)}>
-            Request medical update
-          </button>
-        )
-      )}
+          </Card>
+
+          {closed && (
+            <Note tone="teal" icon="check" title="Case closed.">
+              Final status: {e.status}. No further updates. The final medical report is in the timeline.
+            </Note>
+          )}
+          {role === 'agency' && e.status === 'Pending' && (
+            <Note tone="amber" icon="alert">Waiting for the clinic to review this endorsement.</Note>
+          )}
+          {role === 'agency' && !closed && e.status !== 'Pending' && !lastVisit && (
+            <Note tone="amber" icon="alert" title="No clinic visit yet.">
+              The clinic sends a medical report at each visit; the billing statement follows separately. Expected first visit:{' '}
+              {fmtDate(e.visitDate)}.
+            </Note>
+          )}
+          {role === 'agency' && !closed && lastVisit && (
+            e.updateRequested ? (
+              <Note tone="teal" icon="check" title="Medical update requested.">
+                The clinic has been notified.
+              </Note>
+            ) : (
+              <button className="btn primary" onClick={request}>Request medical update</button>
+            )
+          )}
+        </div>
+
+        <Card title="Updates from the clinic" sub="Each clinic visit sets a status and sends its medical report. The billing statement for a visit is sent separately, later.">
+          <Note tone="teal" title="Latest authorized update" className="banner">
+            {latest.kind === 'visit'
+              ? `Clinic visit ${latest.n}: ${latest.label}, medical report attached`
+              : latest.label}
+          </Note>
+          <ul className="tl">
+            {items.map((t, i) => (
+              <li key={i}>
+                <b>{t.kind === 'visit' ? `Clinic visit ${t.n} · ${t.label}` : t.label}</b>
+                <small>
+                  {stamp(t.ms)}
+                  {role !== 'agency' && t.reportBy ? ` · Report by ${t.reportBy}` : ''}
+                  {role !== 'agency' && t.by ? ` · Sent by ${t.by}` : ''}
+                </small>
+                {t.kind === 'visit' && (
+                  <div className="files">
+                    <FileRow label="Medical report" file={t.report} />
+                    {!t.billing && <small>Billing statement for this visit to follow.</small>}
+                  </div>
+                )}
+                {t.kind === 'billing' && (
+                  <div className="files">
+                    <FileRow label="Billing statement" file={t.file} />
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      </div>
     </Shell>
   );
 }
 
-/** Notifications for the signed-in user (M13, S20, A16). */
+/** Notifications for the signed-in user. */
 export function Alerts() {
   const { state } = useStore();
   const list = myAlerts(state);
   return (
     <Shell title="Alerts" tab="alerts">
-      <h2>Notifications</h2>
-      {list.length === 0 && <p className="empty">No notifications yet.</p>}
-      {list.map((a) => (
-        <div className="card" key={a.id}>
-          <div>{a.text}</div>
-          <div className="meta">{stamp(a.ms)}</div>
-        </div>
-      ))}
+      <Intro title="Notifications" sub="Updates about your endorsements, requests and accounts." />
+      <Card className="narrow">
+        {list.length === 0 ? (
+          <Empty text="You have no notifications yet." icon="bell" />
+        ) : (
+          <div className="rowlist">
+            {list.map((a) => (
+              <div className="row" key={a.id}>
+                <div>
+                  <div>{a.text}</div>
+                  <div className="meta">{stamp(a.ms)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
     </Shell>
   );
 }
 
-/** Profile (M14–M15 for agencies, S21/A17 for clinic users). */
+/** Profile: account details, and contact editing for agencies. */
 export function Profile() {
   const { state, dispatch } = useStore();
-  const { role, name } = state.session;
+  const { role, name, duty } = state.session;
   const signOut = () => dispatch({ type: 'logout' });
 
-  if (role !== 'agency') {
-    return (
-      <Shell title="Profile" tab="profile">
-        <div className="card">
-          <b>{name}</b>
-          <div className="meta">{ROLE_LABEL[role]} · NGC Medical Specialists Clinic</div>
-        </div>
-        <button className="btn primary block" onClick={signOut}>Sign out</button>
-      </Shell>
-    );
-  }
-  return <AgencyProfile onSignOut={signOut} />;
+  if (role === 'agency') return <AgencyProfile onSignOut={signOut} />;
+
+  return (
+    <Shell title="Profile" tab="profile">
+      <Intro title={name} sub="Your clinic account.">
+        <button className="btn" onClick={signOut}><Icon name="logout" size={16} /> Sign out</button>
+      </Intro>
+      <Card className="narrow" title="Account">
+        <Details
+          cols
+          items={[
+            ['Role', ROLE_LABEL[role]],
+            ['Organization', 'NGC Medical Specialists Clinic'],
+            ...(role === 'staff' ? [['Assigned to', duty]] : []),
+            ['Password', 'Reset by the clinic admin'],
+          ]}
+        />
+      </Card>
+    </Shell>
+  );
 }
 
 function AgencyProfile({ onSignOut }) {
@@ -175,11 +186,12 @@ function AgencyProfile({ onSignOut }) {
   const { toast } = useNav();
   const a = state.agencies.find((x) => x.id === state.session.agencyId);
   const [editing, setEditing] = useState(false);
-  const [f, setF] = useState({
+  const blank = () => ({
     address: a.address,
     authContact: a.authorized.contact, authEmail: a.authorized.email,
     billContact: a.billing.contact, billEmail: a.billing.email,
   });
+  const [f, setF] = useState(blank);
   const set = (k) => (ev) => setF({ ...f, [k]: ev.target.value });
 
   const save = () => {
@@ -192,61 +204,58 @@ function AgencyProfile({ onSignOut }) {
     toast('Details updated');
   };
 
-  if (editing) {
-    return (
-      <Shell title="Profile" tab="profile">
-        <h2>Edit details</h2>
-        <p className="sub">To change the agency name or the named persons, contact the clinic.</p>
-        <Field label="Address"><input type="text" value={f.address} onChange={set('address')} /></Field>
-        <h3>Authorized person · {a.authorized.name}</h3>
-        <Field label="Contact no."><input type="tel" value={f.authContact} onChange={set('authContact')} /></Field>
-        <Field label="Email address"><input type="email" value={f.authEmail} onChange={set('authEmail')} /></Field>
-        <h3>Medical report and billing · {a.billing.name}</h3>
-        <Field label="Contact no."><input type="tel" value={f.billContact} onChange={set('billContact')} /></Field>
-        <Field label="Email address"><input type="email" value={f.billEmail} onChange={set('billEmail')} /></Field>
-        <button className="btn primary block" onClick={save}>Save changes</button>
-        <button className="btn block" onClick={() => setEditing(false)}>Cancel</button>
-      </Shell>
-    );
-  }
-
   return (
     <Shell title="Profile" tab="profile">
-      <div className="card">
-        <div className="card-head">
-          <b>{a.name}</b>
-          <Chip>{a.status}</Chip>
+      <Intro title={a.name} sub="Manning agency account. To change the agency name or the named persons, contact the clinic.">
+        <button className="btn primary" onClick={() => { setF(blank()); setEditing(true); }}>Edit details</button>
+        <button className="btn" onClick={onSignOut}><Icon name="logout" size={16} /> Sign out</button>
+      </Intro>
+      <div className="split even">
+        <Card title="Agency" action={<Chip>{a.status}</Chip>}>
+          <Details items={[['Agency name', a.name], ['Address', a.address], ['Username', a.username]]} />
+        </Card>
+        <div className="stack">
+          <Card title="Authorized person">
+            <Details
+              cols
+              items={[['Name', a.authorized.name], ['Position', a.authorized.position],
+                ['Contact no.', a.authorized.contact], ['Email address', a.authorized.email]]}
+            />
+          </Card>
+          <Card title="In charge of medical report and billing">
+            <Details
+              cols
+              items={[['Name', a.billing.name], ['Position', a.billing.position],
+                ['Contact no.', a.billing.contact], ['Email address', a.billing.email]]}
+            />
+          </Card>
         </div>
-        <div className="meta">Manning agency account · details you submitted when requesting access</div>
       </div>
-      <div className="card">
-        <b>Agency</b>
-        <Rows items={[['Agency name', a.name], ['Address', a.address]]} />
-        <div className="meta">To change the agency name, contact the clinic.</div>
-      </div>
-      <div className="card">
-        <b>Authorized person</b>
-        <Rows items={[['Name', a.authorized.name], ['Position', a.authorized.position],
-          ['Contact no.', a.authorized.contact], ['Email address', a.authorized.email]]} />
-      </div>
-      <div className="card">
-        <b>In charge of medical report and billing</b>
-        <Rows items={[['Name', a.billing.name], ['Position', a.billing.position],
-          ['Contact no.', a.billing.contact], ['Email address', a.billing.email]]} />
-      </div>
-      <div className="card">
-        <b>Documents submitted</b>
-        {a.docs.map((d) => (
-          <div className="filerow" key={d}>
-            <span>📄 {d}</span>
-            <button className="link" onClick={() => toast(`${d} is a demo file`)}>Preview</button>
+
+      {editing && (
+        <Modal
+          wide
+          title="Edit details"
+          sub="Contact details the clinic uses to reach your agency."
+          onClose={() => setEditing(false)}
+          footer={(
+            <>
+              <button className="btn" onClick={() => setEditing(false)}>Cancel</button>
+              <button className="btn primary" onClick={save}>Save changes</button>
+            </>
+          )}
+        >
+          <Field label="Address"><input type="text" value={f.address} onChange={set('address')} /></Field>
+          <div className="form-grid">
+            <h3 className="full">Authorized person: {a.authorized.name}</h3>
+            <Field label="Contact no."><input type="tel" value={f.authContact} onChange={set('authContact')} /></Field>
+            <Field label="Email address"><input type="email" value={f.authEmail} onChange={set('authEmail')} /></Field>
+            <h3 className="full">Medical report and billing: {a.billing.name}</h3>
+            <Field label="Contact no."><input type="tel" value={f.billContact} onChange={set('billContact')} /></Field>
+            <Field label="Email address"><input type="email" value={f.billEmail} onChange={set('billEmail')} /></Field>
           </div>
-        ))}
-      </div>
-      <button className="btn primary block" onClick={() => setEditing(true)}>Edit details</button>
-      <button className="btn block" onClick={onSignOut}>Sign out</button>
+        </Modal>
+      )}
     </Shell>
   );
 }
-
-export { agencyName };
