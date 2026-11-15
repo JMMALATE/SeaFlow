@@ -2,6 +2,7 @@
 import { createContext, useContext, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useStore, myAlerts, can, ROLE_LABEL } from './store.jsx';
+import { LOGO } from './logo.js';
 
 /** Navigation context: { nav, back, reset, toast } — provided by App. */
 export const NavCtx = createContext(null);
@@ -71,22 +72,15 @@ const TABS = {
 };
 
 /*
- * The official SeaFlow logo.
- * Put the logo image at public/seaflow-logo.png and it is used everywhere:
- * the sign-in panel, the sidebar and the mobile sign-in header. The image is
- * shown as-is (never cropped, stretched or recoloured) on a white tile, so a
- * logo with a white background sits cleanly on the navy panels. Until the
- * file exists, a simple placeholder mark is shown instead.
+ * The official SeaFlow logo (embedded in logo.js).
+ * It is always shown as-is, never cropped, stretched or recoloured, on a white
+ * rounded tile, because the artwork uses white inside its shapes and navy
+ * outlines that would disappear on the navy panels.
  */
-const LOGO_SRC = './seaflow-logo.png';
-let logoMissing = false; // remembered for the whole session, so a missing file is requested only once
-
 export function Logo({ size = 'sm' }) {
-  const [missing, setMissing] = useState(logoMissing);
-  if (missing) return <span className={`mark ${size}`}><Icon name="wave" size={size === 'lg' ? 30 : 20} /></span>;
   return (
     <span className={`logo-tile ${size}`}>
-      <img src={LOGO_SRC} alt="SeaFlow logo" onError={() => { logoMissing = true; setMissing(true); }} />
+      <img src={LOGO} alt="SeaFlow logo" />
     </span>
   );
 }
