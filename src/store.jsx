@@ -48,11 +48,19 @@ export const isClosed = (e) => CLOSED.includes(e.status);
 /** Whole days until a deadline (negative when it has passed). */
 export const daysLeft = (ms) => Math.ceil((ms - Date.now()) / DAY);
 
-/** How many clinic visits have been recorded. Each visit has one update with a medical report. */
-export const visitsOf = (e) => e.timeline.filter((t) => t.kind === 'report').length;
+/**
+ * The clinic visits of a case, oldest first.
+ * A visit is one timeline entry holding the status set at that visit, its
+ * medical report and its billing statement.
+ */
+export const visitsOf = (e) => e.timeline.filter((t) => t.kind === 'visit');
 
-/** Deadline for sending the billing statement. Null when nothing is waiting. */
-export const billingDue = (e) => (e.billing.state === 'toSend' ? e.billing.reportMs + BILLING_WINDOW : null);
+/** Every clinic visit across all cases, as { e, v } pairs (for the billing lists). */
+export const billingItems = (state) =>
+  state.endorsements.flatMap((e) => visitsOf(e).map((v) => ({ e, v })));
+
+/** Deadline for the billing statement of a visit that does not have one yet. */
+export const billingDue = (v) => v.ms + BILLING_WINDOW;
 
 /** Role-based access for clinic staff: what = 'updates' or 'billing'. */
 export function can(session, what) {
@@ -131,36 +139,30 @@ function seed() {
     const receivedMs = NOW - hoursAgo * HOUR;
     const timeline = [{ label: 'Received', ms: receivedMs }];
     let turnaroundMin = null;
-    let arrivedMs = null;
-    let lastUpdateMs = null;
-    let billing = { state: 'none' };
+    // One clinic visit = the status set at that visit + its medical report + its billing statement.
+    const visit = (no, label, ms, billed = true) => ({
+      kind: 'visit', n: no, label, ms,
+      report: `Medical_Report_${id}_V${no}.pdf`, reportBy: billed ? 'R. Santos' : 'M. Reyes',
+      billing: billed ? `Billing_${id}_V${no}.pdf` : null,
+      billingMs: billed ? ms : null, billingBy: billed ? 'R. Santos' : null,
+    });
     if (status !== 'Pending') {
       turnaroundMin = 8 + (n % 5) * 4;
       timeline.push({ label: 'Accepted', ms: receivedMs + turnaroundMin * 60e3 });
       if (status !== 'Accepted') {
-        // One update with a medical report is sent every time the patient comes to the clinic.
-        const closed = CLOSED.includes(status);
-        const by = 'R. Santos';
-        if (closed) {
+        if (CLOSED.includes(status)) {
           // Two visits: the first check-up, then the visit that closed the case.
-          arrivedMs = receivedMs + 2 * HOUR;
-          timeline.push({ label: 'Treatment in Progress', ms: arrivedMs, kind: 'report', file: `Medical_Report_${id}.pdf`, by });
-          lastUpdateMs = receivedMs + 72 * HOUR;
-          timeline.push({ label: status, ms: lastUpdateMs, kind: 'report', file: `Final_Medical_Report_${id}.pdf`, by });
-          billing = { state: 'sent', file: `Billing_${id}.pdf`, reportMs: lastUpdateMs, sentMs: lastUpdateMs + HOUR };
-          timeline.push({ label: 'Billing statement sent', ms: lastUpdateMs + HOUR, kind: 'billing', file: `Billing_${id}.pdf`, by: 'L. Garcia' });
+          timeline.push(visit(1, 'Treatment in Progress', receivedMs + 2 * HOUR));
+          timeline.push(visit(2, status, receivedMs + 72 * HOUR));
         } else {
-          // One visit so far.
-          arrivedMs = Math.max(receivedMs + 2 * HOUR, NOW - ((n % 9) + 1) * DAY);
-          lastUpdateMs = arrivedMs;
-          timeline.push({ label: status, ms: arrivedMs, kind: 'report', file: `Medical_Report_${id}.pdf`, by });
-          billing = { state: 'toSend', reportMs: arrivedMs };
+          // One visit so far. Some were recorded by updates-only staff, so billing is still to follow.
+          const ms = Math.max(receivedMs + 2 * HOUR, NOW - ((n % 9) + 1) * DAY);
+          timeline.push(visit(1, status, ms, n % 2 === 1));
         }
       }
     }
     return {
-      ref: id, name, position, vessel, agencyId, status, receivedMs, timeline, turnaroundMin, billing,
-      arrivedMs, lastUpdateMs,
+      ref: id, name, position, vessel, agencyId, status, receivedMs, timeline, turnaroundMin,
       case: kase,
       birthday: `19${70 + (n % 28)}-0${1 + (n % 9)}-1${n % 9}`,
       age: 2026 - (1970 + (n % 28)),
@@ -176,10 +178,11 @@ function seed() {
     };
   };
 
-  // Turn a sent billing back into "waiting to be sent" (for demo variety).
+  // Make the latest visit of a case wait for its billing statement (for demo variety).
   const unsendBilling = (e) => {
-    e.timeline = e.timeline.filter((t) => t.kind !== 'billing');
-    e.billing = { state: 'toSend', reportMs: e.lastUpdateMs };
+    Object.assign(e.timeline[e.timeline.length - 1], {
+      billing: null, billingMs: null, billingBy: null, reportBy: 'M. Reyes',
+    });
   };
 
   const named = [
@@ -194,7 +197,7 @@ function seed() {
     mk(132, 'Mark Villanueva', '2nd Mate', 'MV Ocean Grace', 'a3', 'Treatment in Progress', 9, 'Fractured wrist'),
     mk(130, 'Pedro Ramos', 'Oiler', 'MV Pacific Star', 'a1', 'Fit to Work', 150, 'Dermatitis'),
   ];
-  unsendBilling(named[named.length - 1]); // Pedro Ramos: report sent, billing still waiting
+  unsendBilling(named[named.length - 1]); // Pedro Ramos: last visit still waits for billing
 
   // Older records for Pacific Crew so lists, paging and reports have volume.
   const first = ['Jose', 'Ana', 'Liza', 'Noel', 'Rosa', 'Arnel', 'Tina', 'Ben', 'Cora', 'Dino', 'Elmer', 'Faye'];
@@ -208,7 +211,7 @@ function seed() {
   const filler = Array.from({ length: 119 }, (_, i) =>
     mk(1000 + i, `${first[i % first.length]} ${last[(i * 7) % last.length]}`, posts[i % posts.length],
       ships[i % ships.length], 'a1', cycle[i % cycle.length], 90 + i * 10, cases[i % cases.length]));
-  unsendBilling(filler[100]); // one old case whose billing is past the 30-day window
+  unsendBilling(filler[100]); // one old visit whose billing is past the 30-day window
 
   const endorsements = [...named, ...filler].sort((a, b) => b.receivedMs - a.receivedMs);
 
@@ -242,11 +245,12 @@ function reducer(s, a) {
   const now = Date.now();
 
   // Agency activity is not written to the audit log.
-  const audit = (action, id = '—', note) => {
-    if (!me || me.role === 'agency') return s.audit;
+  // `base` lets one action add several entries (a visit logs its report and its billing).
+  const audit = (action, id = '—', note, base = s.audit) => {
+    if (!me || me.role === 'agency') return base;
     return [
-      { id: s.audit.length + 1, who: me.name, role: ROLE_LABEL[me.role], action, ref: id, ms: now, note },
-      ...s.audit,
+      { id: base.length + 1, who: me.name, role: ROLE_LABEL[me.role], action, ref: id, ms: now, note },
+      ...base,
     ];
   };
   const alert = (list, to, text) => [{ id: list.length + 1, to, text, ms: now }, ...list];
@@ -303,8 +307,7 @@ function reducer(s, a) {
       const item = {
         ...a.form, ref: id, agencyId: me.agencyId, status: 'Pending', receivedMs: now,
         timeline: [{ label: 'Received', ms: now }],
-        turnaroundMin: null, arrivedMs: null, lastUpdateMs: null,
-        billing: { state: 'none' }, cashBasis: false, updateRequested: false,
+        turnaroundMin: null, cashBasis: false, updateRequested: false,
       };
       return {
         ...s,
@@ -337,25 +340,35 @@ function reducer(s, a) {
       };
     }
 
-    // A clinic visit: staff send the update with its medical report.
-    // The first one also records the patient's arrival.
-    case 'sendUpdate': {
+    // A clinic visit: the new status, its medical report and its billing statement.
+    // Staff who do not handle billing leave it out; billing staff attach it afterwards.
+    case 'recordVisit': {
       const e = find(a.id);
-      const visit = visitsOf(e) + 1;
+      const n = visitsOf(e).length + 1;
+      const to = agencyName(s, e.agencyId);
+      const entry = {
+        kind: 'visit', n, label: a.status, ms: now,
+        report: a.report, reportBy: me.name,
+        billing: a.billing || null, billingMs: a.billing ? now : null, billingBy: a.billing ? me.name : null,
+      };
+      let log = audit('Submitted medical report', a.id,
+        `File: ${a.report} · Clinic visit ${n} · Status: ${a.status} · Patient: ${e.name} · Sent to ${to}`);
+      if (a.billing) {
+        log = audit('Submitted billing statement', a.id,
+          `File: ${a.billing} · Clinic visit ${n} · Patient: ${e.name} · Sent to ${to}`, log);
+      }
       return {
         ...s,
         endorsements: patch(a.id, (x) => ({
-          ...x, status: a.status, updateRequested: false, lastUpdateMs: now, arrivedMs: x.arrivedMs ?? now,
-          timeline: [...x.timeline, { label: a.status, ms: now, file: a.file, kind: 'report', by: me.name }],
-          // The 30-day billing clock starts at the first report that has no billing yet.
-          billing: x.billing.state === 'toSend' ? x.billing : { state: 'toSend', reportMs: now },
+          ...x, status: a.status, updateRequested: false, timeline: [...x.timeline, entry],
         })),
-        alerts: alert(s.alerts, `agency:${e.agencyId}`, `Clinic visit ${visit}: medical report received for ${a.id} (${a.status}).`),
-        audit: audit('Submitted medical report', a.id,
-          `File: ${a.file} · Clinic visit ${visit} · Status: ${a.status} · Patient: ${e.name} · Sent to ${agencyName(s, e.agencyId)}`),
+        alerts: alert(s.alerts, `agency:${e.agencyId}`,
+          `Clinic visit ${n} for ${a.id} (${a.status}): medical report${a.billing ? ' and billing statement' : ''} received.`),
+        audit: log,
       };
     }
 
+    // Billing staff attach the billing statement of a visit that was recorded without one.
     case 'sendBilling': {
       const e = find(a.id);
       const contact = s.agencies.find((g) => g.id === e.agencyId).billing;
@@ -363,12 +376,12 @@ function reducer(s, a) {
         ...s,
         endorsements: patch(a.id, (x) => ({
           ...x,
-          timeline: [...x.timeline, { label: 'Billing statement sent', ms: now, file: a.file, kind: 'billing', by: me.name }],
-          billing: { ...x.billing, state: 'sent', file: a.file, sentMs: now },
+          timeline: x.timeline.map((t) =>
+            (t.kind === 'visit' && t.n === a.n ? { ...t, billing: a.file, billingMs: now, billingBy: me.name } : t)),
         })),
-        alerts: alert(s.alerts, `agency:${e.agencyId}`, `Billing statement received for ${a.id}.`),
+        alerts: alert(s.alerts, `agency:${e.agencyId}`, `Billing statement for clinic visit ${a.n} received (${a.id}).`),
         audit: audit('Submitted billing statement', a.id,
-          `File: ${a.file} · Patient: ${e.name} · Sent to ${contact.name}, ${agencyName(s, e.agencyId)}`),
+          `File: ${a.file} · Clinic visit ${a.n} · Patient: ${e.name} · Sent to ${contact.name}, ${agencyName(s, e.agencyId)}`),
       };
     }
 

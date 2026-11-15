@@ -1,7 +1,7 @@
-// General screens: sign in (G1–G2), agency registration (G3–G5), agency password reset.
+// Signed-out screens: sign in, agency registration, agency password reset.
 import { useState } from 'react';
 import { useStore, ROLE_LABEL, DEMO_PASSWORD } from '../store.jsx';
-import { Shell, Field, useNav } from '../ui.jsx';
+import { Shell, Field, Note, Icon, useNav } from '../ui.jsx';
 
 const DEMO_USER = { agency: 'agency.demo', staff: 'staff.demo', admin: 'admin.demo' };
 
@@ -67,15 +67,13 @@ export function SignIn() {
     });
   };
 
+  const usernameBad = roleWarning || (error && !error.startsWith('Incorrect password'));
+
   return (
-    <Shell title="Welcome aboard">
-      <div className="brand">
-        <b>≈ SeaFlow</b>
-        <small>Care coordination. Clear horizons.</small>
-      </div>
+    <Shell title="Sign in">
       <h2>Sign in to your workspace</h2>
-      <p className="sub">Choose your role below to continue.</p>
-      <form onSubmit={submit} noValidate>
+      <p className="lead">Choose your role, then enter your username and password.</p>
+      <form className="form" onSubmit={submit} noValidate>
         <Field label="Role" error={roleWarning && ' '}>
           <select value={role} onChange={(ev) => changeRole(ev.target.value)}>
             {Object.entries(ROLE_LABEL).map(([k, v]) => (
@@ -84,12 +82,9 @@ export function SignIn() {
           </select>
         </Field>
         {roleWarning && (
-          <div className="note amber" role="alert">
-            <b>⚠ No account in this role</b>
-            {roleWarning}
-          </div>
+          <Note tone="amber" icon="alert" title="No account in this role">{roleWarning}</Note>
         )}
-        <Field label="Username" error={(roleWarning || (error && !error.startsWith('Incorrect password'))) && ' '}>
+        <Field label="Username" error={usernameBad && ' '}>
           <input type="text" value={username} autoCapitalize="none" onChange={(ev) => setUsername(ev.target.value)} />
         </Field>
         <Field label="Password" error={error && ' '}>
@@ -103,15 +98,16 @@ export function SignIn() {
             Forgot password?
           </button>
         </div>
-        {error && <p className="err">{error}</p>}
+        {error && <Note tone="red" icon="alert">{error}</Note>}
         <button className="btn primary block">Sign in</button>
+        <button type="button" className="btn block" onClick={() => nav('g.request')}>Request agency access</button>
       </form>
       <p className="hint">
-        Demo accounts: agency.demo, staff.demo, billing.demo, updates.demo, admin.demo · password {DEMO_PASSWORD}
+        Demo accounts: agency.demo, staff.demo, billing.demo, updates.demo, admin.demo. Password: {DEMO_PASSWORD}
       </p>
-      <button className="btn block" onClick={() => nav('g.request')}>Request agency access</button>
       <p className="hint">
-        🛡 Authorized users only. Access is logged. Auto-logout after {state.policy.autoLogoutMinutes} minutes of inactivity.
+        Authorized users only. Access is logged, and you are signed out after {state.policy.autoLogoutMinutes} minutes
+        of inactivity.
       </p>
     </Shell>
   );
@@ -152,44 +148,53 @@ export function RequestAccess() {
     nav('g.submitted', { name: f.agencyName });
   };
 
-  const text = (k, label, placeholder, type = 'text') => (
-    <Field label={`${label} *`} error={errors[k]}>
+  const text = (k, label, placeholder, type = 'text', className = '') => (
+    <Field label={`${label} *`} error={errors[k]} className={className}>
       <input type={type} value={f[k]} placeholder={placeholder} onChange={set(k)} />
     </Field>
   );
 
   return (
-    <Shell title="Request access" back>
+    <Shell title="Request access" back wide>
       <h2>Request agency access</h2>
-      <p className="sub">For accredited manning agencies. The clinic admin reviews every request.</p>
-      <form className="grid-form" onSubmit={submit} noValidate>
-        {text('agencyName', 'Name of manning agency', 'Pacific Crew Manning Agency')}
-        {text('address', 'Address', 'Street, city')}
+      <p className="lead">For accredited manning agencies. The clinic admin reviews every request. Fields marked * are required.</p>
+      <form className="form" onSubmit={submit} noValidate>
+        <div className="form-grid">
+          <h3 className="full">Agency</h3>
+          {text('agencyName', 'Name of manning agency', 'Pacific Crew Manning Agency')}
+          {text('address', 'Address', 'Street, city')}
 
-        <h3>Authorized person</h3>
-        <p className="sub">The agency head or signatory, not the staff who will use the app.</p>
-        {text('authName', 'Name', 'Full name')}
-        {text('authPosition', 'Position', 'e.g. General Manager')}
-        {text('authContact', 'Contact no.', '09xx xxx xxxx', 'tel')}
-        {text('authEmail', 'Email address', 'name@agency.com', 'email')}
+          <div className="full">
+            <h3>Authorized person</h3>
+            <p className="meta">The agency head or signatory, not the staff who will use the system.</p>
+          </div>
+          {text('authName', 'Name', 'Full name')}
+          {text('authPosition', 'Position', 'e.g. General Manager')}
+          {text('authContact', 'Contact no.', '09xx xxx xxxx', 'tel')}
+          {text('authEmail', 'Email address', 'name@agency.com', 'email')}
 
-        <h3>Person in charge of medical report and billing</h3>
-        {text('billName', 'Name', 'Full name')}
-        {text('billPosition', 'Position', 'e.g. Billing Officer')}
-        {text('billContact', 'Contact no.', '09xx xxx xxxx', 'tel')}
-        {text('billEmail', 'Email address', 'billing@agency.com', 'email')}
+          <h3 className="full">Person in charge of medical report and billing</h3>
+          {text('billName', 'Name', 'Full name')}
+          {text('billPosition', 'Position', 'e.g. Billing Officer')}
+          {text('billContact', 'Contact no.', '09xx xxx xxxx', 'tel')}
+          {text('billEmail', 'Email address', 'billing@agency.com', 'email')}
 
-        <h3>Login</h3>
-        {text('username', 'Username', 'Choose a username')}
-        {text('password', 'Password (min. 8 characters)', '', 'password')}
+          <h3 className="full">Login</h3>
+          {text('username', 'Username', 'Choose a username')}
+          {text('password', 'Password (min. 8 characters)', '', 'password')}
+        </div>
 
-        <label className="check">
-          <input type="checkbox" checked={f.confirm} onChange={set('confirm')} />
-          I confirm I am authorized to register this agency and the details are accurate.
-        </label>
-        {errors.confirm && <p className="err">{errors.confirm}</p>}
-        <button className="btn primary block">Submit request</button>
-        <button type="button" className="btn block" onClick={back}>Cancel</button>
+        <div>
+          <label className="check">
+            <input type="checkbox" checked={f.confirm} onChange={set('confirm')} />
+            I confirm I am authorized to register this agency and the details are accurate.
+          </label>
+          {errors.confirm && <p className="err">{errors.confirm}</p>}
+        </div>
+        <div className="actions">
+          <button className="btn primary">Submit request</button>
+          <button type="button" className="btn" onClick={back}>Cancel</button>
+        </div>
       </form>
     </Shell>
   );
@@ -199,10 +204,10 @@ export function RequestSubmitted({ name }) {
   const { reset } = useNav();
   return (
     <Shell title="Request sent">
-      <div className="card center">
-        <div className="big-check">✓</div>
+      <div className="center">
+        <div className="success-mark"><Icon name="check" size={28} /></div>
         <h2>Request submitted</h2>
-        <p className="sub">
+        <p className="lead">
           {name} is now waiting for clinic admin approval. You can sign in with your chosen username once the
           request is approved.
         </p>
@@ -235,14 +240,12 @@ export function ForgotPassword({ role = 'agency', username: initial = '' }) {
   if (role !== 'agency') {
     return (
       <Shell title="Forgot password" back>
-        <div className="card">
-          <b>Ask the clinic admin</b>
-          <p className="sub">
-            Clinic staff and admin passwords are reset by the clinic admin under Manage → Users. The admin
-            will give you a new temporary password.
-          </p>
-          <button className="btn primary block" onClick={back}>Back to sign in</button>
-        </div>
+        <h2>Ask the clinic admin</h2>
+        <p className="lead">
+          Clinic staff and admin passwords are reset by the clinic admin under Manage, Users. The admin will give
+          you a new temporary password.
+        </p>
+        <button className="btn primary block" onClick={back}>Back to sign in</button>
       </Shell>
     );
   }
@@ -277,43 +280,46 @@ export function ForgotPassword({ role = 'agency', username: initial = '' }) {
     <Shell title="Forgot password" back>
       <h2>Reset agency password</h2>
       {step === 1 ? (
-        <form onSubmit={sendCode} noValidate>
-          <p className="sub">We send a verification code to the authorized person on your agency account.</p>
-          <Field label="Agency username" error={error}>
-            <input type="text" value={username} autoCapitalize="none"
-              onChange={(ev) => { setUsername(ev.target.value); setError(''); }} />
-          </Field>
-          <Field label="Send the code to">
-            <select value={channel} onChange={(ev) => setChannel(ev.target.value)}>
-              <option value="email">Email address</option>
-              <option value="sms">Mobile number</option>
-            </select>
-          </Field>
-          <button className="btn primary block">Send verification code</button>
-        </form>
+        <>
+          <p className="lead">We send a verification code to the authorized person on your agency account.</p>
+          <form className="form" onSubmit={sendCode} noValidate>
+            <Field label="Agency username" error={error}>
+              <input type="text" value={username} autoCapitalize="none"
+                onChange={(ev) => { setUsername(ev.target.value); setError(''); }} />
+            </Field>
+            <Field label="Send the code to">
+              <select value={channel} onChange={(ev) => setChannel(ev.target.value)}>
+                <option value="email">Email address</option>
+                <option value="sms">Mobile number</option>
+              </select>
+            </Field>
+            <button className="btn primary block">Send verification code</button>
+          </form>
+        </>
       ) : (
-        <form onSubmit={save} noValidate>
-          <p className="sub">A 6-digit code was sent to {sent.to}.</p>
-          <div className="note amber">
-            <b>Demo only</b>
-            No real message is sent in this prototype. Your code is {sent.code}.
-          </div>
-          <Field label="Verification code">
-            <input type="text" inputMode="numeric" maxLength={6} value={code}
-              onChange={(ev) => { setCode(ev.target.value); setError(''); }} />
-          </Field>
-          <Field label="New password (min. 8 characters)">
-            <input type="password" value={password} onChange={(ev) => { setPassword(ev.target.value); setError(''); }} />
-          </Field>
-          <Field label="Repeat new password">
-            <input type="password" value={again} onChange={(ev) => { setAgain(ev.target.value); setError(''); }} />
-          </Field>
-          {error && <p className="err">{error}</p>}
-          <button className="btn primary block">Change password</button>
-          <button type="button" className="btn block" onClick={() => { setStep(1); setError(''); }}>
-            Send a new code
-          </button>
-        </form>
+        <>
+          <p className="lead">A 6-digit code was sent to {sent.to}.</p>
+          <form className="form" onSubmit={save} noValidate>
+            <Note tone="amber" icon="alert" title="Demo only">
+              No real message is sent in this prototype. Your code is {sent.code}.
+            </Note>
+            <Field label="Verification code">
+              <input type="text" inputMode="numeric" maxLength={6} value={code}
+                onChange={(ev) => { setCode(ev.target.value); setError(''); }} />
+            </Field>
+            <Field label="New password (min. 8 characters)">
+              <input type="password" value={password} onChange={(ev) => { setPassword(ev.target.value); setError(''); }} />
+            </Field>
+            <Field label="Repeat new password">
+              <input type="password" value={again} onChange={(ev) => { setAgain(ev.target.value); setError(''); }} />
+            </Field>
+            {error && <Note tone="red" icon="alert">{error}</Note>}
+            <button className="btn primary block">Change password</button>
+            <button type="button" className="btn block" onClick={() => { setStep(1); setError(''); }}>
+              Send a new code
+            </button>
+          </form>
+        </>
       )}
     </Shell>
   );

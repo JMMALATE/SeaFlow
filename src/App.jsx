@@ -104,13 +104,11 @@ function Inner() {
   const Screen = SCREENS[top.name];
 
   return (
-    <div className="stage">
-      <div className="phone">
-        <NavCtx.Provider value={ctx}>
-          <Screen key={`${depth}:${top.name}`} {...top.params} />
-        </NavCtx.Provider>
-        {toast && <div className="toast" role="status">{toast}</div>}
-      </div>
+    <div className="root">
+      <NavCtx.Provider value={ctx}>
+        <Screen key={`${depth}:${top.name}`} {...top.params} />
+      </NavCtx.Provider>
+      {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
 }

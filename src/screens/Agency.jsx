@@ -1,17 +1,17 @@
-// Manning agency side (M1–M18). Agencies only ever see their own endorsements.
+// Manning agency side. Agencies only ever see their own endorsements.
 import { useState } from 'react';
-import { useStore, IN_PROGRESS, CLOSED, isClosed, refOf, stamp } from '../store.jsx';
-import { Shell, Chip, Field, FilePick, Paged, useNav } from '../ui.jsx';
-import { EndorsementCard } from './Shared.jsx';
+import { useStore, IN_PROGRESS, CLOSED, isClosed, refOf, stamp, visitsOf } from '../store.jsx';
+import { Shell, Intro, Card, Chip, Field, FilePick, Table, Stat, Empty, Note, Icon, useNav } from '../ui.jsx';
+import { Person } from './Shared.jsx';
 
 function useMine() {
   const { state } = useStore();
   const agency = state.agencies.find((a) => a.id === state.session.agencyId);
   const mine = state.endorsements.filter((e) => e.agencyId === agency.id);
-  // Billing statements the clinic has sent to this agency, newest first.
+  // Billing statements the clinic has sent to this agency (one per clinic visit), newest first.
   const bills = mine
-    .filter((e) => e.billing.state === 'sent')
-    .sort((a, b) => b.billing.sentMs - a.billing.sentMs);
+    .flatMap((e) => visitsOf(e).filter((v) => v.billing).map((v) => ({ e, v })))
+    .sort((a, b) => b.v.billingMs - a.v.billingMs);
   return { agency, mine, bills };
 }
 
@@ -27,102 +27,124 @@ function greeting() {
   return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
 }
 
-function BillCard({ e }) {
-  const { nav, toast } = useNav();
-  return (
-    <div className="card">
-      <div className="card-head">
-        <b>{e.name}</b>
-        <Chip tone="green">Billing received</Chip>
-      </div>
-      <div className="meta">{e.ref} · {e.vessel}</div>
-      <div className="meta">Received {stamp(e.billing.sentMs)}</div>
-      <div className="filerow">
-        <span>📄 {e.billing.file}</span>
-        <button className="link" onClick={() => toast(`${e.billing.file} is a demo file`)}>View</button>
-      </div>
-      <button className="btn block" onClick={() => nav('timeline', { id: e.ref })}>Open case</button>
-    </div>
-  );
-}
+const ENDORSEMENT_COLUMNS = [
+  { head: 'Seafarer', cell: (e) => <Person e={e} /> },
+  { head: 'Reference', cell: (e) => e.ref, className: 'nowrap' },
+  { head: 'Received', cell: (e) => stamp(e.receivedMs), className: 'nowrap' },
+  { head: 'Clinic visits', cell: (e) => visitsOf(e).length || 'None yet' },
+  { head: 'Status', cell: (e) => <Chip>{e.status}</Chip> },
+];
 
-/** M1 Agency home, with billing on the dashboard */
+/** Agency home: counts, recent endorsements, latest billing. */
 export function Home() {
-  const { nav, reset } = useNav();
+  const { nav, reset, toast } = useNav();
   const { agency, mine, bills } = useMine();
   const count = (g) => mine.filter(GROUPS[g]).length;
   const short = agency.name.split(' ').slice(0, 2).join(' ');
 
   return (
     <Shell title="Agency home" tab="m.home">
-      <h2>{greeting()}, {short}</h2>
-      <p className="sub">{agency.name}</p>
-      <div className="stats four">
-        <button className="stat" onClick={() => nav('m.list', { group: 'Pending' })}>
-          <strong className="c-amber">{count('Pending')}</strong>
-          <small>Pending ›</small>
-        </button>
-        <button className="stat" onClick={() => nav('m.list', { group: 'In progress' })}>
-          <strong className="c-teal">{count('In progress')}</strong>
-          <small>In progress ›</small>
-        </button>
-        <button className="stat" onClick={() => nav('m.list', { group: 'Concluded' })}>
-          <strong>{count('Concluded')}</strong>
-          <small>Concluded ›</small>
-        </button>
-        <button className="stat" onClick={() => reset('m.billing')}>
-          <strong className="c-green">{bills.length}</strong>
-          <small>Billing statements ›</small>
-        </button>
+      <Intro title={`${greeting()}, ${short}`} sub={`${agency.name}. Only your agency's records are shown.`}>
+        <button className="btn primary" onClick={() => nav('m.new')}><Icon name="plus" size={16} /> New endorsement</button>
+      </Intro>
+
+      <div className="stats">
+        <Stat value={count('Pending')} label="Pending review" tone="c-amber" onClick={() => nav('m.list', { group: 'Pending' })} />
+        <Stat value={count('In progress')} label="In progress" tone="c-teal" onClick={() => nav('m.list', { group: 'In progress' })} />
+        <Stat value={count('Concluded')} label="Concluded" onClick={() => nav('m.list', { group: 'Concluded' })} />
+        <Stat value={bills.length} label="Billing statements" tone="c-green" onClick={() => reset('m.billing')} />
       </div>
-      <button className="btn primary block" onClick={() => nav('m.new')}>+ New endorsement</button>
 
-      <h3>Recent endorsements</h3>
-      <p className="sub">Your agency's records only</p>
-      {mine.slice(0, 4).map((e) => (
-        <EndorsementCard key={e.ref} e={e} onClick={() => nav('timeline', { id: e.ref })} />
-      ))}
-      {mine.length === 0 && <p className="empty">No endorsements yet.</p>}
+      <div className="split section">
+        <Card
+          flush
+          title="Recent endorsements"
+          action={<button className="link" onClick={() => reset('m.list')}>View all</button>}
+        >
+          <Table
+            columns={ENDORSEMENT_COLUMNS.filter((c) => c.head !== 'Clinic visits')}
+            rows={mine.slice(0, 6)}
+            rowKey={(e) => e.ref}
+            onRow={(e) => nav('timeline', { id: e.ref })}
+            pager={false}
+            empty="No endorsements yet. Start with New endorsement."
+          />
+        </Card>
 
-      <h3>Latest billing statements</h3>
-      <p className="sub">Sent by the clinic to {agency.billing.name} · {agency.billing.email}</p>
-      {bills.slice(0, 2).map((e) => <BillCard key={e.ref} e={e} />)}
-      {bills.length === 0 && <p className="empty">No billing statements yet.</p>}
-      {bills.length > 2 && (
-        <button className="btn block" onClick={() => reset('m.billing')}>View all billing ({bills.length})</button>
-      )}
+        <Card
+          title="Latest billing statements"
+          sub={`One per clinic visit, sent to ${agency.billing.name}.`}
+          action={<button className="link" onClick={() => reset('m.billing')}>View all</button>}
+        >
+          {bills.length === 0 ? (
+            <Empty text="No billing statements yet." icon="receipt" />
+          ) : (
+            <div className="rowlist">
+              {bills.slice(0, 5).map(({ e, v }) => (
+                <div className="row" key={`${e.ref}:${v.n}`}>
+                  <div>
+                    <div className="strong">{e.name}</div>
+                    <div className="meta">{e.ref}, clinic visit {v.n}</div>
+                    <div className="meta">{stamp(v.billingMs)}</div>
+                  </div>
+                  <button className="link" onClick={() => toast(`${v.billing} is a demo file`)}>View</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
     </Shell>
   );
 }
 
-/** Agency billing: every billing statement received from the clinic */
+/** Agency billing: every billing statement received from the clinic. */
 export function Billing() {
+  const { nav, toast } = useNav();
   const { bills } = useMine();
   const [q, setQ] = useState('');
   const needle = q.trim().toLowerCase();
   const list = bills.filter(
-    (e) => !needle || `${e.name} ${e.ref} ${e.vessel} ${e.billing.file}`.toLowerCase().includes(needle),
+    ({ e, v }) => !needle || `${e.name} ${e.ref} ${e.vessel} ${v.billing}`.toLowerCase().includes(needle),
   );
 
   return (
     <Shell title="Billing" tab="m.billing">
-      <h2>Billing statements</h2>
-      <p className="sub">Statements the clinic has sent to your agency.</p>
-      <Field label="Search">
-        <input type="search" value={q} placeholder="Search name, reference or vessel" onChange={(ev) => setQ(ev.target.value)} />
-      </Field>
-      <Paged
-        key={needle}
-        items={list}
-        size={10}
-        empty="No billing statements match."
-        render={(e) => <BillCard key={e.ref} e={e} />}
-      />
+      <Intro title="Billing statements" sub="Every clinic visit comes with a medical report and a billing statement." />
+      <div className="toolbar">
+        <Field label="Search" className="grow">
+          <input type="search" value={q} placeholder="Search name, reference or vessel" onChange={(ev) => setQ(ev.target.value)} />
+        </Field>
+      </div>
+      <Card flush>
+        <Table
+          key={needle}
+          columns={[
+            { head: 'Seafarer', cell: ({ e }) => <Person e={e} /> },
+            { head: 'Reference', cell: ({ e }) => e.ref, className: 'nowrap' },
+            { head: 'Clinic visit', cell: ({ v }) => `Visit ${v.n}, ${v.label}` },
+            { head: 'Received', cell: ({ v }) => stamp(v.billingMs), className: 'nowrap' },
+            { head: 'Billing statement', cell: ({ v }) => v.billing },
+            {
+              head: '', stop: true, className: 'right',
+              cell: ({ e, v }) => (
+                <div className="actions">
+                  <button className="btn sm" onClick={() => toast(`${v.billing} is a demo file`)}>View</button>
+                  <button className="btn sm" onClick={() => nav('timeline', { id: e.ref })}>Open case</button>
+                </div>
+              ),
+            },
+          ]}
+          rows={list}
+          rowKey={({ e, v }) => `${e.ref}:${v.n}`}
+          empty="No billing statements match."
+        />
+      </Card>
     </Shell>
   );
 }
 
-/** M2–M3 Endorsements: history and search */
+/** Endorsements: history and search. */
 export function Endorsements({ group = 'All' }) {
   const { nav } = useNav();
   const { mine } = useMine();
@@ -135,23 +157,29 @@ export function Endorsements({ group = 'All' }) {
 
   return (
     <Shell title="Endorsements" tab="m.list" back={group !== 'All'}>
-      <h2>History &amp; search</h2>
-      <p className="sub">Past and active endorsements, no follow-up calls needed.</p>
-      <Field label="Search">
-        <input type="search" value={q} placeholder="Search name, vessel or reference" onChange={(ev) => setQ(ev.target.value)} />
-      </Field>
-      <Field label="Show">
-        <select value={g} onChange={(ev) => setG(ev.target.value)}>
-          {Object.keys(GROUPS).map((k) => <option key={k}>{k}</option>)}
-        </select>
-      </Field>
-      <Paged
-        key={`${g}:${needle}`}
-        items={list}
-        size={10}
-        empty="No endorsements match."
-        render={(e) => <EndorsementCard key={e.ref} e={e} onClick={() => nav('timeline', { id: e.ref })} />}
-      />
+      <Intro title="Endorsements" sub="Past and active endorsements. Open one to see its clinic visits.">
+        <button className="btn primary" onClick={() => nav('m.new')}><Icon name="plus" size={16} /> New endorsement</button>
+      </Intro>
+      <div className="toolbar">
+        <Field label="Search" className="grow">
+          <input type="search" value={q} placeholder="Search name, vessel or reference" onChange={(ev) => setQ(ev.target.value)} />
+        </Field>
+        <Field label="Show">
+          <select value={g} onChange={(ev) => setG(ev.target.value)}>
+            {Object.keys(GROUPS).map((k) => <option key={k}>{k}</option>)}
+          </select>
+        </Field>
+      </div>
+      <Card flush>
+        <Table
+          key={`${g}:${needle}`}
+          columns={ENDORSEMENT_COLUMNS}
+          rows={list}
+          rowKey={(e) => e.ref}
+          onRow={(e) => nav('timeline', { id: e.ref })}
+          empty="No endorsements match."
+        />
+      </Card>
     </Shell>
   );
 }
@@ -179,10 +207,10 @@ function ageFrom(birthday) {
   return age >= 0 && age < 120 ? String(age) : '';
 }
 
-/** M4–M7 New endorsement, M16–M17 duplicate warning */
+/** New endorsement, in three sections, with the duplicate warning. */
 export function NewEndorsement() {
   const { state, dispatch } = useStore();
-  const { reset } = useNav();
+  const { reset, back } = useNav();
   const { agency, mine } = useMine();
   const [f, setF] = useState(BLANK);
   const [errors, setErrors] = useState({});
@@ -231,70 +259,98 @@ export function NewEndorsement() {
 
   return (
     <Shell title="New endorsement" back tab="m.list">
-      <h2>Endorse a seafarer</h2>
-      <p className="sub">* Required · Only coordination details</p>
-      {dupWarned && (
-        <div className="note amber">
-          Possible duplicate: same name and vessel already endorsed. Submit again to confirm.
-        </div>
-      )}
-      <form className="grid-form" onSubmit={submit} noValidate>
-        {input('name', 'Seafarer full name', 'Juan Dela Cruz')}
-        <div className="two">
-          {input('birthday', 'Birthday', '', 'date')}
-          {input('age', 'Age', 'e.g. 32', 'number')}
-        </div>
-        {input('address', 'Address', 'Street, barangay, city')}
-        {input('email', 'Email address', 'name@email.com', 'email')}
-        {input('contact', 'Contact number', '09xx xxx xxxx', 'tel', "The contact name is the seafarer's name.")}
-        {input('position', 'Position', '3rd Officer')}
-        {input('vessel', 'Vessel (name of the ship)', 'MV Pacific Star')}
-        <Field label="Agent *">
-          <input type="text" value={agency.name} readOnly />
-        </Field>
-        {input('repatriation', 'Date of repatriation', '', 'date')}
-        {input('case', 'Case', 'e.g. Fractured wrist')}
-
-        <h3>Clinic visit</h3>
-        {input('visitDate', 'When can the patient come to the clinic?', '', 'date',
-          'The clinic sends an update each time the patient comes in.')}
-        <div className="meta">Referral letter (PDF or photo) *</div>
-        <FilePick
-          file={f.referral}
-          empty="No referral letter attached"
-          onPick={(name) => { setF({ ...f, referral: name }); setErrors({ ...errors, referral: undefined }); }}
-          onRemove={() => setF({ ...f, referral: '' })}
-        />
-        {errors.referral && <p className="err">{errors.referral}</p>}
-
-        <label className="check">
-          <input type="checkbox" checked={f.confirm} onChange={set('confirm')} />
-          I confirm my agency is authorized to share this information with the clinic.
-        </label>
-        {errors.confirm && <p className="err">{errors.confirm}</p>}
-        <button type="button" className="btn block" onClick={() => { setF(demoDetails()); setErrors({}); setDupWarned(false); }}>
+      <Intro title="Endorse a seafarer" sub="Fields marked * are required. Share coordination details only.">
+        <button type="button" className="btn" onClick={() => { setF(demoDetails()); setErrors({}); setDupWarned(false); }}>
           Fill demo details
         </button>
-        <button className="btn primary block">Submit endorsement</button>
+      </Intro>
+      <form className="stack" onSubmit={submit} noValidate>
+        {dupWarned && (
+          <Note tone="amber" icon="alert" title="Possible duplicate">
+            The same name and vessel are already endorsed and still open. Submit again to confirm.
+          </Note>
+        )}
+        <div className="split even">
+          <Card title="Seafarer details">
+            <div className="form">
+              {input('name', 'Seafarer full name', 'Juan Dela Cruz')}
+              <div className="two">
+                {input('birthday', 'Birthday', '', 'date')}
+                {input('age', 'Age', 'e.g. 32', 'number')}
+              </div>
+              {input('address', 'Address', 'Street, barangay, city')}
+              <div className="two">
+                {input('email', 'Email address', 'name@email.com', 'email')}
+                {input('contact', 'Contact number', '09xx xxx xxxx', 'tel')}
+              </div>
+            </div>
+          </Card>
+          <div className="stack">
+            <Card title="Assignment and case">
+              <div className="form">
+                <div className="two">
+                  {input('position', 'Position', '3rd Officer')}
+                  {input('vessel', 'Vessel (name of the ship)', 'MV Pacific Star')}
+                </div>
+                <div className="two">
+                  <Field label="Agent *">
+                    <input type="text" value={agency.name} readOnly />
+                  </Field>
+                  {input('repatriation', 'Date of repatriation', '', 'date')}
+                </div>
+                {input('case', 'Case', 'e.g. Fractured wrist')}
+              </div>
+            </Card>
+            <Card title="Clinic visit" sub="Each clinic visit comes with a medical report and a billing statement.">
+              <div className="form">
+                {input('visitDate', 'When can the patient come to the clinic?', '', 'date')}
+                <div className="field">
+                  <label><span>Referral letter (PDF or photo) *</span></label>
+                  <FilePick
+                    file={f.referral}
+                    empty="No referral letter attached"
+                    onPick={(name) => { setF({ ...f, referral: name }); setErrors({ ...errors, referral: undefined }); }}
+                    onRemove={() => setF({ ...f, referral: '' })}
+                  />
+                  {errors.referral && <p className="err">{errors.referral}</p>}
+                </div>
+              </div>
+            </Card>
+          </div>
+        </div>
+
+        <Card>
+          <label className="check">
+            <input type="checkbox" checked={f.confirm} onChange={set('confirm')} />
+            I confirm my agency is authorized to share this information with the clinic.
+          </label>
+          {errors.confirm && <p className="err">{errors.confirm}</p>}
+          <div className="card-foot">
+            <button className="btn primary">Submit endorsement</button>
+            <button type="button" className="btn" onClick={back}>Cancel</button>
+          </div>
+        </Card>
       </form>
     </Shell>
   );
 }
 
-/** M18 Endorsement submitted */
+/** Confirmation after submitting an endorsement. */
 export function Submitted({ id }) {
   const { nav, reset } = useNav();
   return (
     <Shell title="Submitted" tab="m.list">
-      <div className="card center">
-        <div className="big-check">✓</div>
+      <Card className="narrow center">
+        <div className="success-mark"><Icon name="check" size={28} /></div>
         <h2>Endorsement submitted</h2>
-        <p className="sub">Sent to the clinic verification queue.</p>
+        <p className="meta" style={{ margin: '4px 0 16px' }}>Sent to the clinic review queue.</p>
         <div className="meta">Reference number</div>
         <div className="ref">{id}</div>
-        <button className="btn primary block" onClick={() => nav('timeline', { id })}>View status</button>
-        <button className="btn block" onClick={() => reset('m.home')}>Back to home</button>
-      </div>
+        <div className="card-foot" style={{ justifyContent: 'center' }}>
+          <button className="btn primary" onClick={() => nav('timeline', { id })}>View status</button>
+          <button className="btn" onClick={() => reset('m.home')}>Back to home</button>
+        </div>
+      </Card>
     </Shell>
   );
 }
