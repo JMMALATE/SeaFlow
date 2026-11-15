@@ -1,6 +1,6 @@
 // Screens used by more than one role: status timeline, alerts, profile.
 import { useState } from 'react';
-import { useStore, myAlerts, stamp, dayOf, fmtDate, isClosed, updateDue, agencyName, ROLE_LABEL } from '../store.jsx';
+import { useStore, myAlerts, stamp, fmtDate, isClosed, visitsOf, agencyName, ROLE_LABEL } from '../store.jsx';
 import { Shell, Chip, Field, Rows, useNav } from '../ui.jsx';
 
 /** Compact endorsement card used in most lists. */
@@ -45,7 +45,9 @@ export function Timeline({ id }) {
   const items = [...e.timeline].reverse(); // newest first
   const latest = items[0];
   const closed = isClosed(e);
-  const due = updateDue(e);
+  const visits = visitsOf(e);
+  // Number each medical report as a clinic visit, oldest first.
+  const visitNo = new Map(e.timeline.filter((t) => t.kind === 'report').map((t, i) => [t, i + 1]));
 
   return (
     <Shell title="Status timeline" back tab={HOME_TAB[role]}>
@@ -60,8 +62,7 @@ export function Timeline({ id }) {
         <Rows
           items={[
             ['Can come to the clinic', fmtDate(e.visitDate)],
-            ['Arrived at clinic', e.arrivedMs ? stamp(e.arrivedMs) : 'Not yet'],
-            ...(due ? [['Next weekly update due', dayOf(due)]] : []),
+            ['Clinic visits', visits ? `${visits} · last on ${stamp(e.lastUpdateMs)}` : 'None yet'],
           ]}
         />
         <div className="filerow">
@@ -75,7 +76,11 @@ export function Timeline({ id }) {
         {items.map((t, i) => (
           <li key={i}>
             <b>{t.label}</b>
-            <small>{stamp(t.ms)}</small>
+            <small>
+              {stamp(t.ms)}
+              {visitNo.has(t) ? ` · Clinic visit ${visitNo.get(t)}` : ''}
+              {role !== 'agency' && t.by ? ` · Submitted by ${t.by}` : ''}
+            </small>
             {t.file && (
               <div className="file">
                 📄 {t.file}
@@ -94,7 +99,7 @@ export function Timeline({ id }) {
         {latest.label}
         {latest.file ? ' · file attached' : ''}
       </div>
-      <p className="hint">Reports arrive as files from the clinic.</p>
+      <p className="hint">The clinic sends a medical report after every clinic visit. Patients return weekly.</p>
 
       {closed && (
         <div className="note teal">
@@ -110,8 +115,9 @@ export function Timeline({ id }) {
       {role === 'agency' && !closed && e.status !== 'Pending' && (
         !e.arrivedMs ? (
           <div className="note amber">
-            <b>Waiting for the patient to report to the clinic.</b>
-            Weekly medical updates start once the patient arrives. Expected visit: {fmtDate(e.visitDate)}.
+            <b>No clinic visit yet.</b>
+            The clinic sends an update or medical report each time the patient comes in. Expected first
+            visit: {fmtDate(e.visitDate)}.
           </div>
         ) : e.updateRequested ? (
           <div className="note amber">

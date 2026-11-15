@@ -162,7 +162,7 @@ export function RequestAccess() {
     <Shell title="Request access" back>
       <h2>Request agency access</h2>
       <p className="sub">For accredited manning agencies. The clinic admin reviews every request.</p>
-      <form onSubmit={submit} noValidate>
+      <form className="grid-form" onSubmit={submit} noValidate>
         {text('agencyName', 'Name of manning agency', 'Pacific Crew Manning Agency')}
         {text('address', 'Address', 'Street, city')}
 

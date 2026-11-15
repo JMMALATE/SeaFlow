@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import {
   useStore, STATUSES, IN_PROGRESS, UPDATE_STATUSES, agencyName, dayOf, stamp, fmtDate,
-  hasBreakGlass, can, updateDue, billingDue, daysLeft,
+  hasBreakGlass, can, visitsOf, billingDue, daysLeft,
 } from '../store.jsx';
 import { Shell, Chip, Field, FilePick, Paged, Rows, useNav } from '../ui.jsx';
 
@@ -93,7 +93,6 @@ export function Dashboard() {
   const count = (s) => all.filter((e) => e.status === s).length;
   const billing = all.filter((e) => e.billing.state === 'toSend');
   const billingLate = billing.filter((e) => daysLeft(billingDue(e)) < 0).length;
-  const updatesLate = all.filter((e) => updateDue(e) && daysLeft(updateDue(e)) < 0).length;
   const updates = can(state.session, 'updates');
   const bills = can(state.session, 'billing');
   const tiles = [
@@ -116,8 +115,8 @@ export function Dashboard() {
         )}
         {updates && (
           <button className="stat row edge" onClick={() => reset('s.active')}>
-            <strong className="c-red">{updatesLate}</strong>
-            <small>Weekly updates overdue ›</small>
+            <strong className="c-amber">{all.filter((e) => e.updateRequested).length}</strong>
+            <small>Updates requested ›</small>
           </button>
         )}
         {bills && (
@@ -189,18 +188,18 @@ export function Queue() {
                   <b>Accept {e.name} on a cash basis?</b>
                   Self pay.
                 </div>
-                <div className="btn-row">
+                <div className="actions">
                   <button className="btn primary" onClick={() => accept(e, true)}>Confirm cash basis</button>
                   <button className="btn" onClick={() => setCashFor(null)}>Cancel</button>
                 </div>
               </>
             ) : (
-              <div className="btn-row">
+              <div className="actions">
                 <button className="btn primary" onClick={() => accept(e, false)}>Accept</button>
                 <button className="btn" onClick={() => setCashFor(e.ref)}>Cash basis</button>
+                <button className="btn" onClick={() => patient.open(e.ref)}>{patient.label(e.ref)}</button>
               </div>
             )}
-            <button className="btn block" onClick={() => patient.open(e.ref)}>{patient.label(e.ref)}</button>
           </div>
         )}
       />
@@ -208,7 +207,11 @@ export function Queue() {
   );
 }
 
-/** One active case: arrival at the clinic, then weekly updates (S7–S9). */
+/**
+ * One active case (S7–S9).
+ * Each time the patient comes to the clinic, staff record the visit by sending
+ * an update with its medical report. The first one marks the patient's arrival.
+ */
 function ActiveCard({ e }) {
   const { state, dispatch } = useStore();
   const { nav, toast } = useNav();
@@ -217,10 +220,7 @@ function ActiveCard({ e }) {
   const [status, setStatus] = useState(UPDATE_STATUSES.includes(e.status) ? e.status : 'Treatment in Progress');
   const [file, setFile] = useState('');
   const [error, setError] = useState('');
-  const last = e.timeline[e.timeline.length - 1];
-  const due = updateDue(e);
-  const left = due ? daysLeft(due) : null;
-  const showForm = e.arrivedMs && (open || e.updateRequested);
+  const visits = visitsOf(e);
 
   const send = () => {
     if (!file) return setError('Attach the medical report before sending the update.');
@@ -228,45 +228,37 @@ function ActiveCard({ e }) {
     setFile('');
     setError('');
     setOpen(false);
-    return toast('Update sent · agency notified');
+    return toast(`Clinic visit ${visits + 1} recorded · agency notified`);
   };
 
   return (
     <div className="card">
-      <div className="over">{agencyName(state, e.agencyId)}</div>
-      <b>{e.name}</b>
-      <div className="meta">{e.ref} · Received {stamp(e.receivedMs)}</div>
-      <div className="meta">Last update: {last.label} · {stamp(last.ms)}</div>
-      {due && (
-        <div className="meta">
-          Next weekly update due {dayOf(due)}
-          {left < 0 ? ` · ${-left} day${left === -1 ? '' : 's'} late` : ` · in ${left} day${left === 1 ? '' : 's'}`}
+      <div className="card-head">
+        <div>
+          <div className="over">{agencyName(state, e.agencyId)}</div>
+          <b>{e.name}</b>
         </div>
-      )}
-      <div className="chips">
-        {due && left < 0 && <Chip tone="red">Update overdue</Chip>}
-        {e.updateRequested && <Chip>Update requested</Chip>}
-        {e.cashBasis && <Chip>Cash basis</Chip>}
         <Chip>{e.status}</Chip>
       </div>
+      <div className="meta">{e.ref} · Received {stamp(e.receivedMs)}</div>
+      <div className="meta">
+        {visits
+          ? `Clinic visits: ${visits} · Last visit ${stamp(e.lastUpdateMs)}`
+          : `No clinic visit yet · Expected ${fmtDate(e.visitDate)}`}
+      </div>
+      {(e.updateRequested || e.cashBasis) && (
+        <div className="chips">
+          {e.updateRequested && <Chip>Update requested</Chip>}
+          {e.cashBasis && <Chip>Cash basis</Chip>}
+        </div>
+      )}
 
-      {!e.arrivedMs ? (
-        <>
-          <div className="note amber">
-            <b>Waiting for the patient · expected {fmtDate(e.visitDate)}</b>
-            Weekly updates start once the patient has reported to the clinic.
-          </div>
-          <button
-            className="btn primary block"
-            onClick={() => { dispatch({ type: 'arrive', id: e.ref }); toast(`${e.name} marked as arrived · agency notified`); }}
-          >
-            Mark as arrived at clinic
-          </button>
-        </>
-      ) : showForm ? (
-        <>
+      {open && (
+        <div className="visit-form">
+          <b>Clinic visit {visits + 1}</b>
+          <div className="meta">Send the update or medical report for this visit to the agency.</div>
           {e.updateRequested && <div className="note amber">📩 Update requested by the agency</div>}
-          <Field label="Update status">
+          <Field label="Status after this visit">
             <select value={status} onChange={(ev) => setStatus(ev.target.value)}>
               {UPDATE_STATUSES.map((s) => <option key={s}>{s}</option>)}
             </select>
@@ -274,14 +266,21 @@ function ActiveCard({ e }) {
           <div className="meta">Medical report (PDF) *</div>
           <FilePick file={file} onPick={(n) => { setFile(n); setError(''); }} onRemove={() => setFile('')} />
           {error && <p className="err">{error}</p>}
-          <button className="btn primary block" onClick={send}>Send update</button>
-        </>
-      ) : (
-        <button className="btn primary block" onClick={() => setOpen(true)}>Send weekly update</button>
+        </div>
       )}
-      <div className="btn-row">
-        <button className="btn" onClick={() => nav('timeline', { id: e.ref })}>Timeline</button>
-        <button className="btn" onClick={() => patient.open(e.ref)}>{patient.label(e.ref)}</button>
+      <div className="actions">
+        {open ? (
+          <>
+            <button className="btn primary" onClick={send}>Send update</button>
+            <button className="btn" onClick={() => { setOpen(false); setError(''); }}>Cancel</button>
+          </>
+        ) : (
+          <>
+            <button className="btn primary" onClick={() => setOpen(true)}>Record clinic visit</button>
+            <button className="btn" onClick={() => nav('timeline', { id: e.ref })}>Timeline</button>
+            <button className="btn" onClick={() => patient.open(e.ref)}>{patient.label(e.ref)}</button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -290,8 +289,8 @@ function ActiveCard({ e }) {
 /** S4–S5 Active cases */
 export function Active() {
   const { state } = useStore();
-  // Agency requests first, then the cases whose weekly update is due soonest.
-  const rank = (e) => (e.updateRequested ? -Infinity : updateDue(e) ?? Infinity);
+  // Agency requests first, then patients who have not come in yet, then the rest.
+  const rank = (e) => (e.updateRequested ? 0 : e.arrivedMs ? 2 : 1);
   const active = state.endorsements
     .filter((e) => IN_PROGRESS.includes(e.status))
     .sort((a, b) => rank(a) - rank(b) || b.receivedMs - a.receivedMs);
@@ -304,10 +303,12 @@ export function Active() {
   return (
     <Shell title="Active patients" tab="s.active">
       <NetBanner />
-      <h2>Needs updates</h2>
-      <p className="sub">Updates are sent weekly, starting when the patient arrives at the clinic.</p>
+      <h2>Active patients</h2>
+      <p className="sub">
+        Send an update or medical report each time the patient comes to the clinic. Patients return weekly.
+      </p>
       {filters}
-      <Paged key={key} items={list} empty="No active cases." render={(e) => <ActiveCard key={e.ref} e={e} />} />
+      <Paged key={key} items={list} size={6} empty="No active cases." render={(e) => <ActiveCard key={e.ref} e={e} />} />
     </Shell>
   );
 }
@@ -475,7 +476,7 @@ export function PatientOverview({ id }) {
             ['Status', e.status],
             ['Manning agency', agent],
             ['Case', e.case],
-            ['Clinic visit', e.arrivedMs ? `Arrived ${stamp(e.arrivedMs)}` : `Expected ${fmtDate(e.visitDate)}`],
+            ['Clinic visits', visitsOf(e) ? `${visitsOf(e)} · last on ${stamp(e.lastUpdateMs)}` : `None yet · expected ${fmtDate(e.visitDate)}`],
           ]}
         />
       </div>

@@ -25,7 +25,6 @@ export const DUTIES = ['Endorsements and updates', 'Billing', 'Both'];
 
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
-export const UPDATE_EVERY = 7 * DAY; // weekly medical updates, counted from arrival at the clinic
 export const BILLING_WINDOW = 30 * DAY; // billing must reach the agency within 30 days
 
 /* ---------- helpers ---------- */
@@ -49,9 +48,8 @@ export const isClosed = (e) => CLOSED.includes(e.status);
 /** Whole days until a deadline (negative when it has passed). */
 export const daysLeft = (ms) => Math.ceil((ms - Date.now()) / DAY);
 
-/** When the next weekly update is due. Null until the patient has arrived. */
-export const updateDue = (e) =>
-  (e.arrivedMs && IN_PROGRESS.includes(e.status) ? (e.lastUpdateMs ?? e.arrivedMs) + UPDATE_EVERY : null);
+/** How many clinic visits have been recorded. Each visit has one update with a medical report. */
+export const visitsOf = (e) => e.timeline.filter((t) => t.kind === 'report').length;
 
 /** Deadline for sending the billing statement. Null when nothing is waiting. */
 export const billingDue = (e) => (e.billing.state === 'toSend' ? e.billing.reportMs + BILLING_WINDOW : null);
@@ -140,21 +138,23 @@ function seed() {
       turnaroundMin = 8 + (n % 5) * 4;
       timeline.push({ label: 'Accepted', ms: receivedMs + turnaroundMin * 60e3 });
       if (status !== 'Accepted') {
-        // The patient has reported to the clinic, so weekly updates have started.
-        arrivedMs = receivedMs + 2 * HOUR;
-        timeline.push({ label: 'Arrived at clinic', ms: arrivedMs });
+        // One update with a medical report is sent every time the patient comes to the clinic.
         const closed = CLOSED.includes(status);
-        const ms = closed ? receivedMs + 72 * HOUR : Math.max(arrivedMs + HOUR, NOW - ((n % 9) + 1) * DAY);
-        lastUpdateMs = ms;
-        timeline.push({
-          label: status, ms, kind: 'report',
-          file: closed ? `Final_Medical_Report_${id}.pdf` : `Medical_Report_${id}.pdf`,
-        });
+        const by = 'R. Santos';
         if (closed) {
-          billing = { state: 'sent', file: `Billing_${id}.pdf`, reportMs: ms, sentMs: ms + HOUR };
-          timeline.push({ label: 'Billing statement sent', ms: ms + HOUR, kind: 'billing', file: `Billing_${id}.pdf` });
+          // Two visits: the first check-up, then the visit that closed the case.
+          arrivedMs = receivedMs + 2 * HOUR;
+          timeline.push({ label: 'Treatment in Progress', ms: arrivedMs, kind: 'report', file: `Medical_Report_${id}.pdf`, by });
+          lastUpdateMs = receivedMs + 72 * HOUR;
+          timeline.push({ label: status, ms: lastUpdateMs, kind: 'report', file: `Final_Medical_Report_${id}.pdf`, by });
+          billing = { state: 'sent', file: `Billing_${id}.pdf`, reportMs: lastUpdateMs, sentMs: lastUpdateMs + HOUR };
+          timeline.push({ label: 'Billing statement sent', ms: lastUpdateMs + HOUR, kind: 'billing', file: `Billing_${id}.pdf`, by: 'L. Garcia' });
         } else {
-          billing = { state: 'toSend', reportMs: ms };
+          // One visit so far.
+          arrivedMs = Math.max(receivedMs + 2 * HOUR, NOW - ((n % 9) + 1) * DAY);
+          lastUpdateMs = arrivedMs;
+          timeline.push({ label: status, ms: arrivedMs, kind: 'report', file: `Medical_Report_${id}.pdf`, by });
+          billing = { state: 'toSend', reportMs: arrivedMs };
         }
       }
     }
@@ -229,8 +229,8 @@ function seed() {
     breakGlass: [],
     // The audit log records clinic users only (staff and admin).
     audit: [
-      { id: 2, who: 'R. Santos', role: 'Clinic Staff', action: 'Accepted', ref: juan.ref, ms: juan.timeline[1].ms },
-      { id: 1, who: 'R. Santos', role: 'Clinic Staff', action: 'Viewed', ref: juan.ref, ms: juan.timeline[1].ms - 60e3 },
+      { id: 2, who: 'R. Santos', role: 'Clinic Staff', action: 'Accepted endorsement', ref: juan.ref, ms: juan.timeline[1].ms, note: 'Patient: Juan Dela Cruz · Pacific Crew Manning Agency' },
+      { id: 1, who: 'R. Santos', role: 'Clinic Staff', action: 'Viewed record', ref: juan.ref, ms: juan.timeline[1].ms - 60e3, note: 'Patient: Juan Dela Cruz' },
     ],
   };
 }
@@ -332,55 +332,48 @@ function reducer(s, a) {
           timeline: [...x.timeline, { label: 'Accepted', ms: now }],
         })),
         alerts: alert(s.alerts, `agency:${e.agencyId}`, `${a.id} was accepted by the clinic${a.cash ? ' on a cash basis' : ''}.`),
-        audit: audit('Accepted', a.id, a.cash ? 'Cash basis (self-pay)' : undefined),
+        audit: audit('Accepted endorsement', a.id,
+          `Patient: ${e.name} · ${agencyName(s, e.agencyId)}${a.cash ? ' · Cash basis (self-pay)' : ''}`),
       };
     }
 
-    // The patient reported to the clinic: treatment and weekly updates start.
-    case 'arrive': {
-      const e = find(a.id);
-      return {
-        ...s,
-        endorsements: patch(a.id, (x) => ({
-          ...x, arrivedMs: now, status: 'Treatment in Progress',
-          timeline: [...x.timeline, { label: 'Arrived at clinic', ms: now }],
-        })),
-        alerts: alert(s.alerts, `agency:${e.agencyId}`, `${e.name} (${a.id}) arrived at the clinic. Weekly updates start now.`),
-        audit: audit('Marked arrived', a.id),
-      };
-    }
-
+    // A clinic visit: staff send the update with its medical report.
+    // The first one also records the patient's arrival.
     case 'sendUpdate': {
       const e = find(a.id);
+      const visit = visitsOf(e) + 1;
       return {
         ...s,
         endorsements: patch(a.id, (x) => ({
-          ...x, status: a.status, updateRequested: false, lastUpdateMs: now,
-          timeline: [...x.timeline, { label: a.status, ms: now, file: a.file, kind: 'report' }],
+          ...x, status: a.status, updateRequested: false, lastUpdateMs: now, arrivedMs: x.arrivedMs ?? now,
+          timeline: [...x.timeline, { label: a.status, ms: now, file: a.file, kind: 'report', by: me.name }],
           // The 30-day billing clock starts at the first report that has no billing yet.
           billing: x.billing.state === 'toSend' ? x.billing : { state: 'toSend', reportMs: now },
         })),
-        alerts: alert(s.alerts, `agency:${e.agencyId}`, `Medical report received for ${a.id} (${a.status}).`),
-        audit: audit('Updated status', a.id, a.status),
+        alerts: alert(s.alerts, `agency:${e.agencyId}`, `Clinic visit ${visit}: medical report received for ${a.id} (${a.status}).`),
+        audit: audit('Submitted medical report', a.id,
+          `File: ${a.file} · Clinic visit ${visit} · Status: ${a.status} · Patient: ${e.name} · Sent to ${agencyName(s, e.agencyId)}`),
       };
     }
 
     case 'sendBilling': {
       const e = find(a.id);
+      const contact = s.agencies.find((g) => g.id === e.agencyId).billing;
       return {
         ...s,
         endorsements: patch(a.id, (x) => ({
           ...x,
-          timeline: [...x.timeline, { label: 'Billing statement sent', ms: now, file: a.file, kind: 'billing' }],
+          timeline: [...x.timeline, { label: 'Billing statement sent', ms: now, file: a.file, kind: 'billing', by: me.name }],
           billing: { ...x.billing, state: 'sent', file: a.file, sentMs: now },
         })),
         alerts: alert(s.alerts, `agency:${e.agencyId}`, `Billing statement received for ${a.id}.`),
-        audit: audit('Sent billing', a.id),
+        audit: audit('Submitted billing statement', a.id,
+          `File: ${a.file} · Patient: ${e.name} · Sent to ${contact.name}, ${agencyName(s, e.agencyId)}`),
       };
     }
 
     case 'logView':
-      return { ...s, audit: audit('Viewed', a.id) };
+      return { ...s, audit: audit('Viewed record', a.id, `Patient: ${find(a.id)?.name}`) };
 
     case 'breakGlass': {
       const minutes = s.policy.breakGlassMinutes;
@@ -391,7 +384,7 @@ function reducer(s, a) {
           ...s.breakGlass,
         ],
         alerts: alert(s.alerts, 'admin', `Break-glass request by ${me.name} on ${a.id}.`),
-        audit: audit('Break-glass', a.id, `Reason: ${a.reason} · ${a.note}`),
+        audit: audit('Break-glass', a.id, `Patient: ${find(a.id)?.name} · Reason: ${a.reason} · ${a.note}`),
       };
     }
 

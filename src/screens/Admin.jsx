@@ -615,10 +615,10 @@ export function BreakGlassReview({ id }) {
 }
 
 const ACTION_TONE = {
-  Accepted: 'green', 'Marked arrived': 'green', 'Created account': 'green', 'Activated account': 'green',
+  'Accepted endorsement': 'green', 'Created account': 'green', 'Activated account': 'green',
   'Break-glass': 'red', 'Flagged break-glass': 'red', 'Deactivated account': 'red',
   'Agency suspended': 'red', 'Agency rejected': 'red',
-  'Updated status': 'teal', 'Sent billing': 'teal',
+  'Submitted medical report': 'teal', 'Submitted billing statement': 'teal',
 };
 
 /** A15 Audit log (read-only). Clinic users only: agency activity is not recorded. */
@@ -640,9 +640,12 @@ export function AuditLog() {
   return (
     <Shell title="Audit log" tab="a.audit">
       <h2>Clinic activity</h2>
-      <p className="sub">Actions by clinic staff and admins. Manning agency activity is not included.</p>
+      <p className="sub">
+        Who did what: every medical report, billing statement and account change by clinic staff and admins.
+        Manning agency activity is not included.
+      </p>
       <Field label="Search">
-        <input type="search" value={q} placeholder="Search by reference number or note" onChange={(ev) => setQ(ev.target.value)} />
+        <input type="search" value={q} placeholder="Search reference, patient or file name" onChange={(ev) => setQ(ev.target.value)} />
       </Field>
       <div className="two">
         <Field label="Clinic user">
@@ -671,7 +674,7 @@ export function AuditLog() {
             </div>
             <div className="meta">{x.role} · {x.ref}</div>
             <div className="meta">{stamp(x.ms)}</div>
-            {x.note && <div className="meta">{x.note}</div>}
+            {x.note && x.note.split(' · ').map((part) => <div className="meta" key={part}>{part}</div>)}
           </div>
         )}
       />

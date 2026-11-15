@@ -238,7 +238,7 @@ export function NewEndorsement() {
           Possible duplicate: same name and vessel already endorsed. Submit again to confirm.
         </div>
       )}
-      <form onSubmit={submit} noValidate>
+      <form className="grid-form" onSubmit={submit} noValidate>
         {input('name', 'Seafarer full name', 'Juan Dela Cruz')}
         <div className="two">
           {input('birthday', 'Birthday', '', 'date')}
@@ -257,7 +257,7 @@ export function NewEndorsement() {
 
         <h3>Clinic visit</h3>
         {input('visitDate', 'When can the patient come to the clinic?', '', 'date',
-          'Weekly medical updates start once the patient has reported to the clinic.')}
+          'The clinic sends an update each time the patient comes in.')}
         <div className="meta">Referral letter (PDF or photo) *</div>
         <FilePick
           file={f.referral}

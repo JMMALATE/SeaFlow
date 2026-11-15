@@ -97,16 +97,17 @@ function Inner() {
 
   // Guard: never show a signed-in screen without a session, or the reverse.
   let top = stack[stack.length - 1];
+  let depth = stack.length;
   const isPublic = PUBLIC.includes(top.name);
-  if (!role && !isPublic) top = { name: 'signin', params: {} };
-  if (role && isPublic) top = { name: HOME[role], params: {} };
+  if (!role && !isPublic) { top = { name: 'signin', params: {} }; depth = 1; }
+  if (role && isPublic) { top = { name: HOME[role], params: {} }; depth = 1; }
   const Screen = SCREENS[top.name];
 
   return (
     <div className="stage">
       <div className="phone">
         <NavCtx.Provider value={ctx}>
-          <Screen key={`${stack.length}:${top.name}`} {...top.params} />
+          <Screen key={`${depth}:${top.name}`} {...top.params} />
         </NavCtx.Provider>
         {toast && <div className="toast" role="status">{toast}</div>}
       </div>
