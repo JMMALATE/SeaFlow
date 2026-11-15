@@ -78,14 +78,14 @@ export function Timeline({ id }) {
           )}
           {role === 'agency' && !closed && e.status !== 'Pending' && !lastVisit && (
             <Note tone="amber" icon="alert" title="No clinic visit yet.">
-              Each clinic visit comes with a medical report and a billing statement. Expected first visit:{' '}
+              The clinic sends a medical report at each visit; the billing statement follows separately. Expected first visit:{' '}
               {fmtDate(e.visitDate)}.
             </Note>
           )}
           {role === 'agency' && !closed && lastVisit && (
             e.updateRequested ? (
               <Note tone="amber" icon="mail" title="Medical update requested.">
-                The clinic sends the report and billing statement at the patient's next visit.
+                The clinic sends the medical report at the patient's next visit.
               </Note>
             ) : (
               <button className="btn primary" onClick={() => setConfirming(true)}>Request medical update</button>
@@ -93,10 +93,10 @@ export function Timeline({ id }) {
           )}
         </div>
 
-        <Card title="Updates from the clinic" sub="Every clinic visit comes with a medical report and a billing statement. Each new status is a new visit.">
+        <Card title="Updates from the clinic" sub="Each clinic visit sets a status and sends its medical report. The billing statement for a visit is sent separately, later.">
           <Note tone="teal" title="Latest authorized update" className="banner">
             {latest.kind === 'visit'
-              ? `Clinic visit ${latest.n}: ${latest.label}, medical report${latest.billing ? ' and billing statement' : ''} attached`
+              ? `Clinic visit ${latest.n}: ${latest.label}, medical report attached`
               : latest.label}
           </Note>
           <ul className="tl">
@@ -106,16 +106,17 @@ export function Timeline({ id }) {
                 <small>
                   {stamp(t.ms)}
                   {role !== 'agency' && t.reportBy ? ` · Report by ${t.reportBy}` : ''}
-                  {role !== 'agency' && t.billingBy ? ` · Billing by ${t.billingBy}` : ''}
+                  {role !== 'agency' && t.by ? ` · Sent by ${t.by}` : ''}
                 </small>
                 {t.kind === 'visit' && (
                   <div className="files">
                     <FileRow label="Medical report" file={t.report} />
-                    {t.billing ? (
-                      <FileRow label="Billing statement" file={t.billing} />
-                    ) : (
-                      <div className="filerow"><Icon name="receipt" size={16} /><span>Billing statement: to follow</span></div>
-                    )}
+                    {!t.billing && <small>Billing statement for this visit to follow.</small>}
+                  </div>
+                )}
+                {t.kind === 'billing' && (
+                  <div className="files">
+                    <FileRow label="Billing statement" file={t.file} />
                   </div>
                 )}
               </li>
@@ -137,8 +138,8 @@ export function Timeline({ id }) {
           )}
         >
           <p>
-            The clinic is notified. The medical report and billing statement are sent to your medical report and
-            billing contact at the patient's next clinic visit.
+            The clinic is notified. The medical report is sent at the patient's next clinic visit, and its billing
+            statement follows separately to your medical report and billing contact.
           </p>
         </Modal>
       )}

@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useStore, STATUSES, IN_PROGRESS, CLOSED, DUTIES, agencyName, dayOf, stamp } from '../store.jsx';
 import {
-  Shell, Intro, Card, Chip, Field, Table, Stat, Details, Note, Empty, Icon, Modal, useNav,
+  Shell, Intro, Card, Chip, Field, Select, Table, Stat, Details, Note, Empty, Icon, Modal, useNav,
 } from '../ui.jsx';
 import { Person } from './Shared.jsx';
 
@@ -42,10 +42,10 @@ export function Overview() {
       </Intro>
 
       <div className="stats">
-        <Stat value={pending} label="Pending endorsements" tone="c-amber" onClick={() => nav('a.all')} />
-        <Stat value={`${average} min`} label="Average time to accept" tone="c-teal" />
-        <Stat value={bgToday} label="Break-glass requests today" tone="c-red" />
-        <Stat value={requests.length} label="Agency requests waiting" />
+        <Stat solid tone="amber" icon="inbox" value={pending} label="Pending endorsements" onClick={() => nav('a.all')} />
+        <Stat solid tone="teal" icon="clock" value={`${average} min`} label="Average time to accept" />
+        <Stat solid tone="red" icon="lock" value={bgToday} label="Break-glass requests today" />
+        <Stat solid tone="blue" icon="user" value={requests.length} label="Agency requests waiting" />
       </div>
 
       <div className="split even section">
@@ -160,32 +160,31 @@ function Users() {
     {
       head: 'Role', stop: true,
       cell: (u) => (
-        <select
-          aria-label={`Role of ${u.name}`}
+        <Select
+          size="sm"
+          ariaLabel={`Role of ${u.name}`}
           value={u.role}
           disabled={u.id === state.session.userId}
-          onChange={(ev) => dispatch({
-            type: 'setUser', id: u.id, verb: 'Changed role', note: ev.target.value,
-            patch: { role: ev.target.value, duty: ev.target.value === 'Clinic Staff' ? (u.duty || 'Both') : null },
+          options={['Clinic Staff', 'Clinic Admin']}
+          onChange={(role) => dispatch({
+            type: 'setUser', id: u.id, verb: 'Changed role', note: role,
+            patch: { role, duty: role === 'Clinic Staff' ? (u.duty || 'Both') : null },
           })}
-        >
-          <option>Clinic Staff</option>
-          <option>Clinic Admin</option>
-        </select>
+        />
       ),
     },
     {
       head: 'Assigned to', stop: true,
       cell: (u) => (u.role === 'Clinic Staff' ? (
-        <select
-          aria-label={`Assignment of ${u.name}`}
+        <Select
+          size="sm"
+          ariaLabel={`Assignment of ${u.name}`}
           value={u.duty}
-          onChange={(ev) => dispatch({
-            type: 'setUser', id: u.id, verb: 'Changed assignment', note: ev.target.value, patch: { duty: ev.target.value },
+          options={DUTIES}
+          onChange={(duty) => dispatch({
+            type: 'setUser', id: u.id, verb: 'Changed assignment', note: duty, patch: { duty },
           })}
-        >
-          {DUTIES.map((d) => <option key={d}>{d}</option>)}
-        </select>
+        />
       ) : <span className="meta">All admin functions</span>),
     },
     {
@@ -243,16 +242,11 @@ function Users() {
               <input type="text" value={f.password} placeholder="At least 8 characters" onChange={set('password')} />
             </Field>
             <Field label="Role">
-              <select value={f.role} onChange={set('role')}>
-                <option>Clinic Staff</option>
-                <option>Clinic Admin</option>
-              </select>
+              <Select value={f.role} onChange={(role) => setF({ ...f, role })} options={['Clinic Staff', 'Clinic Admin']} />
             </Field>
             {f.role === 'Clinic Staff' && (
               <Field label="Assigned to">
-                <select value={f.duty} onChange={set('duty')}>
-                  {DUTIES.map((d) => <option key={d}>{d}</option>)}
-                </select>
+                <Select value={f.duty} onChange={(duty) => setF({ ...f, duty })} options={DUTIES} />
               </Field>
             )}
           </div>
@@ -403,14 +397,18 @@ function Policy() {
           </Field>
           <div className="form-grid">
             <Field label="Break-glass access duration">
-              <select value={p.breakGlassMinutes} onChange={(ev) => setP({ ...p, breakGlassMinutes: Number(ev.target.value) })}>
-                {[15, 30, 60].map((m) => <option key={m} value={m}>{m} minutes</option>)}
-              </select>
+              <Select
+                value={p.breakGlassMinutes}
+                onChange={(breakGlassMinutes) => setP({ ...p, breakGlassMinutes })}
+                options={[15, 30, 60].map((m) => ({ value: m, label: `${m} minutes` }))}
+              />
             </Field>
             <Field label="Auto-logout after inactivity">
-              <select value={p.autoLogoutMinutes} onChange={(ev) => setP({ ...p, autoLogoutMinutes: Number(ev.target.value) })}>
-                {[5, 10, 15, 30].map((m) => <option key={m} value={m}>{m} minutes</option>)}
-              </select>
+              <Select
+                value={p.autoLogoutMinutes}
+                onChange={(autoLogoutMinutes) => setP({ ...p, autoLogoutMinutes })}
+                options={[5, 10, 15, 30].map((m) => ({ value: m, label: `${m} minutes` }))}
+              />
             </Field>
           </div>
         </div>
@@ -543,18 +541,19 @@ export function AllEndorsements() {
           <input type="search" value={q} placeholder="Search name, reference, ship or agency" onChange={(ev) => setQ(ev.target.value)} />
         </Field>
         <Field label="Agency">
-          <select value={agency} onChange={(ev) => setAgency(ev.target.value)}>
-            <option value="">All agencies</option>
-            {state.agencies.filter((a) => a.status !== 'Pending').map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
+          <Select
+            searchable
+            clearable
+            value={agency}
+            onChange={setAgency}
+            options={[
+              { value: '', label: 'All agencies' },
+              ...state.agencies.filter((a) => a.status !== 'Pending').map((a) => ({ value: a.id, label: a.name })),
+            ]}
+          />
         </Field>
         <Field label="Status">
-          <select value={status} onChange={(ev) => setStatus(ev.target.value)}>
-            <option value="">All statuses</option>
-            {STATUSES.map((s) => <option key={s}>{s}</option>)}
-          </select>
+          <Select clearable value={status} onChange={setStatus} options={[{ value: '', label: 'All statuses' }, ...STATUSES]} />
         </Field>
         <label className="check">
           <input type="checkbox" checked={stuckOnly} onChange={(ev) => setStuckOnly(ev.target.checked)} />
@@ -625,18 +624,16 @@ export function Reports() {
     <Shell title="Reports" back tab="a.overview">
       <Intro title="Reports" sub="Endorsement volume and case status across agencies.">
         <Field label="Period">
-          <select value={days} onChange={(ev) => setDays(Number(ev.target.value))}>
-            {[7, 30, 90].map((d) => <option key={d} value={d}>Last {d} days</option>)}
-          </select>
+          <Select value={days} onChange={setDays} options={[7, 30, 90].map((d) => ({ value: d, label: `Last ${d} days` }))} />
         </Field>
       </Intro>
       <div className="stats six">
         <Stat value={recent.length} label={`Received, last ${days} days`} />
         <Stat value={(recent.length / days).toFixed(1)} label="Average per day" />
         <Stat value={`${cash}%`} label="On a cash basis" />
-        <Stat value={inTreatment} label="In treatment now" tone="c-teal" />
-        <Stat value={pending} label="Pending now" tone="c-amber" />
-        <Stat value={state.breakGlass.length} label="Break-glass requests" tone="c-red" />
+        <Stat value={inTreatment} label="In treatment now" tone="teal" />
+        <Stat value={pending} label="Pending now" tone="amber" />
+        <Stat value={state.breakGlass.length} label="Break-glass requests" tone="red" />
       </div>
 
       <div className="split even section">
@@ -747,16 +744,10 @@ export function AuditLog() {
           <input type="search" value={q} placeholder="Search reference, patient or file name" onChange={(ev) => setQ(ev.target.value)} />
         </Field>
         <Field label="Clinic user">
-          <select value={who} onChange={(ev) => setWho(ev.target.value)}>
-            <option value="">All clinic users</option>
-            {people.map((p) => <option key={p}>{p}</option>)}
-          </select>
+          <Select searchable clearable value={who} onChange={setWho} options={[{ value: '', label: 'All clinic users' }, ...people]} />
         </Field>
         <Field label="Action">
-          <select value={action} onChange={(ev) => setAction(ev.target.value)}>
-            <option value="">All actions</option>
-            {actions.map((x) => <option key={x}>{x}</option>)}
-          </select>
+          <Select searchable clearable value={action} onChange={setAction} options={[{ value: '', label: 'All actions' }, ...actions]} />
         </Field>
       </div>
       <Card flush>

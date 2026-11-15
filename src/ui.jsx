@@ -1,5 +1,6 @@
 // Shared layout and UI components. Every screen is built from these.
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore, myAlerts, can, ROLE_LABEL } from './store.jsx';
 
 /** Navigation context: { nav, back, reset, toast } — provided by App. */
@@ -29,6 +30,8 @@ const PATHS = {
   x: 'M6 6l12 12M18 6 6 18',
   wave: 'M3 9c2.5-3 5-3 7.5 0s5 3 7.5 0M3 15c2.5-3 5-3 7.5 0s5 3 7.5 0',
   mail: 'M3 6h18v12H3zM3 7l9 6 9-6',
+  chevron: 'M6 9l6 6 6-6',
+  clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7.5V12l3 2',
 };
 
 export function Icon({ name, size = 18 }) {
@@ -293,21 +296,31 @@ export function Empty({ text, icon = 'inbox' }) {
   );
 }
 
-/** Dashboard tile. Renders a button when it leads somewhere. */
-export function Stat({ value, label, tone, flag, onClick }) {
+/**
+ * Dashboard tile. Renders a button when it leads somewhere.
+ * tone: amber | teal | green | blue | red | slate (by the meaning of the number).
+ * solid: tinted background, for the numbers that matter most on a page.
+ */
+export function Stat({ value, label, tone = 'slate', icon, solid, onClick }) {
   const Tag = onClick ? 'button' : 'div';
   return (
-    <Tag className={`stat${flag ? ` ${flag}` : ''}`} onClick={onClick}>
-      <strong className={tone}>{value}</strong>
-      <span>{label}</span>
+    <Tag className={`stat t-${tone}${solid ? ' solid' : ''}`} onClick={onClick}>
+      {icon && <span className="stat-icon"><Icon name={icon} size={18} /></span>}
+      <span className="stat-text">
+        <strong>{value}</strong>
+        <span>{label}</span>
+      </span>
     </Tag>
   );
 }
 
-/** Label/value pairs. `cols` lays them out two per row on wide screens. */
-export function Details({ items, cols }) {
+/**
+ * Label/value pairs. `cols` lays them out two per row;
+ * `compact` tightens them for record cards.
+ */
+export function Details({ items, cols, compact }) {
   return (
-    <dl className={`dl${cols ? ' cols' : ''}`}>
+    <dl className={`dl${cols ? ' cols' : ''}${compact ? ' compact' : ''}`}>
       {items.map(([label, value]) => (
         <div key={label}>
           <dt>{label}</dt>
@@ -315,6 +328,170 @@ export function Details({ items, cols }) {
         </div>
       ))}
     </dl>
+  );
+}
+
+/* ---------- Dropdown ---------- */
+
+/**
+ * Custom dropdown used everywhere in place of the native <select>.
+ *
+ * options: strings, or { value, label } objects. onChange receives the value.
+ * searchable: adds a search box (for long lists).
+ * clearable: shows a clear button that sets the value back to ''.
+ * size="sm": compact variant for tables.
+ *
+ * The option panel is rendered in a portal with fixed positioning, so tables,
+ * cards and dialogs never clip it. It flips above the control when there is
+ * no room below. Keyboard: arrows, Home/End, Enter, Escape, Tab.
+ */
+export function Select({
+  value, onChange, options, placeholder = 'Select', searchable, clearable, disabled, size, ariaLabel,
+}) {
+  const opts = options.map((o) => (o !== null && typeof o === 'object' ? o : { value: o, label: String(o) }));
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const [pos, setPos] = useState(null);
+  const trigger = useRef(null);
+  const panel = useRef(null);
+  const listId = useId();
+  const current = opts.find((o) => o.value === value);
+  const needle = query.trim().toLowerCase();
+  const shown = needle ? opts.filter((o) => o.label.toLowerCase().includes(needle)) : opts;
+
+  // Work out where the panel goes, relative to the viewport.
+  const place = () => {
+    const r = trigger.current.getBoundingClientRect();
+    const below = window.innerHeight - r.bottom;
+    const up = below < 240 && r.top > below;
+    const width = Math.max(r.width, 200);
+    setPos({
+      left: Math.max(8, Math.min(r.left, window.innerWidth - width - 8)),
+      width,
+      maxHeight: Math.min(320, Math.max(140, (up ? r.top : below) - 16)),
+      ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
+    });
+  };
+
+  const openMenu = () => {
+    if (disabled) return;
+    place();
+    setQuery('');
+    setActive(Math.max(0, opts.findIndex((o) => o.value === value)));
+    setOpen(true);
+  };
+  const close = (refocus = true) => {
+    setOpen(false);
+    if (refocus) trigger.current?.focus();
+  };
+  const choose = (o) => {
+    onChange(o.value);
+    close();
+  };
+
+  // While open: close on an outside press, follow the control when the page scrolls or resizes.
+  useEffect(() => {
+    if (!open) return undefined;
+    const outside = (ev) => {
+      if (!panel.current?.contains(ev.target) && !trigger.current?.contains(ev.target)) setOpen(false);
+    };
+    const follow = (ev) => {
+      if (ev.target instanceof Node && panel.current?.contains(ev.target)) return; // scrolling the options
+      place();
+    };
+    document.addEventListener('mousedown', outside);
+    document.addEventListener('touchstart', outside);
+    window.addEventListener('scroll', follow, true);
+    window.addEventListener('resize', follow);
+    return () => {
+      document.removeEventListener('mousedown', outside);
+      document.removeEventListener('touchstart', outside);
+      window.removeEventListener('scroll', follow, true);
+      window.removeEventListener('resize', follow);
+    };
+  }, [open]);
+
+  // Keep the highlighted option in view.
+  useEffect(() => {
+    if (open) panel.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' });
+  }, [open, active]);
+
+  const onKeyDown = (ev) => {
+    if (!open) {
+      if (['ArrowDown', 'ArrowUp'].includes(ev.key)) { ev.preventDefault(); openMenu(); }
+      return;
+    }
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); close(); }
+    else if (ev.key === 'ArrowDown') { ev.preventDefault(); setActive((a) => Math.min(shown.length - 1, a + 1)); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); setActive((a) => Math.max(0, a - 1)); }
+    else if (ev.key === 'Home') { ev.preventDefault(); setActive(0); }
+    else if (ev.key === 'End') { ev.preventDefault(); setActive(shown.length - 1); }
+    else if (ev.key === 'Enter' || (ev.key === ' ' && !searchable)) {
+      ev.preventDefault();
+      if (shown[active]) choose(shown[active]);
+    } else if (ev.key === 'Tab') close(false);
+  };
+
+  const canClear = clearable && !disabled && value !== '' && value != null;
+
+  return (
+    <div className={`select${size === 'sm' ? ' sm' : ''}${open ? ' open' : ''}${canClear ? ' has-clear' : ''}`} onKeyDown={onKeyDown}>
+      <button
+        type="button"
+        ref={trigger}
+        className="select-trigger"
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-label={ariaLabel}
+        disabled={disabled}
+        onClick={() => (open ? close() : openMenu())}
+      >
+        <span className={current ? undefined : 'placeholder'}>{current ? current.label : placeholder}</span>
+        <Icon name="chevron" size={16} />
+      </button>
+      {canClear && (
+        <button type="button" className="select-clear" aria-label="Clear selection" onClick={() => onChange('')}>
+          <Icon name="x" size={14} />
+        </button>
+      )}
+      {open && createPortal(
+        <div ref={panel} className="select-panel" style={pos}>
+          {searchable && (
+            <div className="select-search">
+              <input
+                autoFocus
+                type="text"
+                value={query}
+                placeholder="Search"
+                aria-label="Search options"
+                onChange={(ev) => { setQuery(ev.target.value); setActive(0); }}
+              />
+            </div>
+          )}
+          <ul id={listId} role="listbox">
+            {shown.length === 0 && <li className="select-empty">No options match "{query}"</li>}
+            {shown.map((o, i) => (
+              <li
+                key={String(o.value)}
+                role="option"
+                aria-selected={o.value === value}
+                data-active={i === active}
+                onMouseEnter={() => setActive(i)}
+                onMouseDown={(ev) => ev.preventDefault()}
+                onClick={() => choose(o)}
+              >
+                <span>{o.label}</span>
+                {o.value === value && <Icon name="check" size={15} />}
+              </li>
+            ))}
+          </ul>
+        </div>,
+        document.body,
+      )}
+    </div>
   );
 }
 

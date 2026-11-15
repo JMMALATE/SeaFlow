@@ -1,7 +1,7 @@
 // Manning agency side. Agencies only ever see their own endorsements.
 import { useState } from 'react';
 import { useStore, IN_PROGRESS, CLOSED, isClosed, refOf, stamp, visitsOf } from '../store.jsx';
-import { Shell, Intro, Card, Chip, Field, FilePick, Table, Stat, Empty, Note, Icon, useNav } from '../ui.jsx';
+import { Shell, Intro, Card, Chip, Field, Select, FilePick, Table, Stat, Empty, Note, Icon, useNav } from '../ui.jsx';
 import { Person } from './Shared.jsx';
 
 function useMine() {
@@ -49,10 +49,10 @@ export function Home() {
       </Intro>
 
       <div className="stats">
-        <Stat value={count('Pending')} label="Pending review" tone="c-amber" onClick={() => nav('m.list', { group: 'Pending' })} />
-        <Stat value={count('In progress')} label="In progress" tone="c-teal" onClick={() => nav('m.list', { group: 'In progress' })} />
-        <Stat value={count('Concluded')} label="Concluded" onClick={() => nav('m.list', { group: 'Concluded' })} />
-        <Stat value={bills.length} label="Billing statements" tone="c-green" onClick={() => reset('m.billing')} />
+        <Stat solid tone="amber" icon="clock" value={count('Pending')} label="Pending review" onClick={() => nav('m.list', { group: 'Pending' })} />
+        <Stat solid tone="teal" icon="pulse" value={count('In progress')} label="In progress" onClick={() => nav('m.list', { group: 'In progress' })} />
+        <Stat solid tone="green" icon="check" value={count('Concluded')} label="Concluded" onClick={() => nav('m.list', { group: 'Concluded' })} />
+        <Stat solid tone="blue" icon="receipt" value={bills.length} label="Billing statements" onClick={() => reset('m.billing')} />
       </div>
 
       <div className="split section">
@@ -110,7 +110,7 @@ export function Billing() {
 
   return (
     <Shell title="Billing" tab="m.billing">
-      <Intro title="Billing statements" sub="Every clinic visit comes with a medical report and a billing statement." />
+      <Intro title="Billing statements" sub="One billing statement per clinic visit, sent by the clinic after the medical report." />
       <div className="toolbar">
         <Field label="Search" className="grow">
           <input type="search" value={q} placeholder="Search name, reference or vessel" onChange={(ev) => setQ(ev.target.value)} />
@@ -165,9 +165,7 @@ export function Endorsements({ group = 'All' }) {
           <input type="search" value={q} placeholder="Search name, vessel or reference" onChange={(ev) => setQ(ev.target.value)} />
         </Field>
         <Field label="Show">
-          <select value={g} onChange={(ev) => setG(ev.target.value)}>
-            {Object.keys(GROUPS).map((k) => <option key={k}>{k}</option>)}
-          </select>
+          <Select value={g} onChange={setG} options={Object.keys(GROUPS)} />
         </Field>
       </div>
       <Card flush>
@@ -301,7 +299,7 @@ export function NewEndorsement() {
                 {input('case', 'Case', 'e.g. Fractured wrist')}
               </div>
             </Card>
-            <Card title="Clinic visit" sub="Each clinic visit comes with a medical report and a billing statement.">
+            <Card title="Clinic visit" sub="The clinic sends a medical report at each visit. Billing statements follow separately.">
               <div className="form">
                 {input('visitDate', 'When can the patient come to the clinic?', '', 'date')}
                 <div className="field">

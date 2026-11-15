@@ -1,7 +1,7 @@
 // Signed-out screens: sign in, agency registration, agency password reset.
 import { useState } from 'react';
 import { useStore, ROLE_LABEL, DEMO_PASSWORD } from '../store.jsx';
-import { Shell, Field, Note, Icon, useNav } from '../ui.jsx';
+import { Shell, Field, Select, Note, Icon, useNav } from '../ui.jsx';
 
 const DEMO_USER = { agency: 'agency.demo', staff: 'staff.demo', admin: 'admin.demo' };
 
@@ -75,11 +75,11 @@ export function SignIn() {
       <p className="lead">Choose your role, then enter your username and password.</p>
       <form className="form" onSubmit={submit} noValidate>
         <Field label="Role" error={roleWarning && ' '}>
-          <select value={role} onChange={(ev) => changeRole(ev.target.value)}>
-            {Object.entries(ROLE_LABEL).map(([k, v]) => (
-              <option key={k} value={k}>{v}</option>
-            ))}
-          </select>
+          <Select
+            value={role}
+            onChange={changeRole}
+            options={Object.entries(ROLE_LABEL).map(([value, label]) => ({ value, label }))}
+          />
         </Field>
         {roleWarning && (
           <Note tone="amber" icon="alert" title="No account in this role">{roleWarning}</Note>
@@ -288,10 +288,11 @@ export function ForgotPassword({ role = 'agency', username: initial = '' }) {
                 onChange={(ev) => { setUsername(ev.target.value); setError(''); }} />
             </Field>
             <Field label="Send the code to">
-              <select value={channel} onChange={(ev) => setChannel(ev.target.value)}>
-                <option value="email">Email address</option>
-                <option value="sms">Mobile number</option>
-              </select>
+              <Select
+                value={channel}
+                onChange={setChannel}
+                options={[{ value: 'email', label: 'Email address' }, { value: 'sms', label: 'Mobile number' }]}
+              />
             </Field>
             <button className="btn primary block">Send verification code</button>
           </form>
