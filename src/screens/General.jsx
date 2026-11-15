@@ -13,30 +13,52 @@ export function SignIn() {
   const [password, setPassword] = useState(DEMO_PASSWORD);
   const [show, setShow] = useState(false);
   const [error, setError] = useState('');
+  const [roleWarning, setRoleWarning] = useState('');
 
+  // Changing the role keeps a typed username. Only the untouched demo
+  // username is swapped for the matching demo account, for convenience.
   const changeRole = (r) => {
     setRole(r);
-    setUsername(DEMO_USER[r]);
-    setPassword(DEMO_PASSWORD);
+    if (Object.values(DEMO_USER).includes(username.trim())) {
+      setUsername(DEMO_USER[r]);
+      setPassword(DEMO_PASSWORD);
+    }
     setError('');
+    setRoleWarning('');
   };
 
   const submit = (ev) => {
     ev.preventDefault();
+    setError('');
+    setRoleWarning('');
     const u = username.trim();
-    if (role === 'agency') {
-      const a = state.agencies.find((x) => x.username === u && x.password === password);
-      if (!a) return setError('Invalid credentials. Check your username and role.');
-      if (a.status === 'Pending') return setError('Your registration is still waiting for admin approval.');
-      if (a.status !== 'Active') return setError(`This agency account is ${a.status.toLowerCase()}. Contact the clinic.`);
-      return dispatch({ type: 'login', session: { role, name: a.name, agencyId: a.id } });
+    if (!u) return setError('Enter your username.');
+
+    // Step 1: look for the username among the accounts of the selected role only.
+    const account = role === 'agency'
+      ? state.agencies.find((x) => x.username === u)
+      : state.users.find((x) => x.username === u && x.role === ROLE_LABEL[role]);
+
+    // No such account under this role: warn.
+    if (!account) {
+      return setRoleWarning(
+        `There is no ${ROLE_LABEL[role]} account with the username "${u}". ` +
+        'Check the username, or choose the role your account belongs to.',
+      );
     }
-    const user = state.users.find(
-      (x) => x.username === u && x.password === password && x.role === ROLE_LABEL[role],
-    );
-    if (!user) return setError('Invalid credentials. Check your username and role.');
-    if (user.status !== 'Active') return setError('This account is not active. Contact the clinic admin.');
-    return dispatch({ type: 'login', session: { role, name: user.name, userId: user.id } });
+
+    // Step 2: the account exists in this role, so check the password and status.
+    if (account.password !== password) return setError('Incorrect password. Please try again.');
+
+    if (role === 'agency') {
+      if (account.status === 'Pending') return setError('Your registration is still waiting for admin approval.');
+      if (account.status !== 'Active') {
+        return setError(`This agency account is ${account.status.toLowerCase()}. Contact the clinic.`);
+      }
+      return dispatch({ type: 'login', session: { role, name: account.name, agencyId: account.id } });
+    }
+    if (account.status !== 'Active') return setError('This account is not active. Contact the clinic admin.');
+    return dispatch({ type: 'login', session: { role, name: account.name, userId: account.id } });
   };
 
   return (
@@ -48,14 +70,20 @@ export function SignIn() {
       <h2>Sign in to your workspace</h2>
       <p className="sub">Choose your role below to continue.</p>
       <form onSubmit={submit} noValidate>
-        <Field label="Role">
+        <Field label="Role" error={roleWarning && ' '}>
           <select value={role} onChange={(ev) => changeRole(ev.target.value)}>
             {Object.entries(ROLE_LABEL).map(([k, v]) => (
               <option key={k} value={k}>{v}</option>
             ))}
           </select>
         </Field>
-        <Field label="Username" error={error && ' '}>
+        {roleWarning && (
+          <div className="note amber" role="alert">
+            <b>⚠ No account in this role</b>
+            {roleWarning}
+          </div>
+        )}
+        <Field label="Username" error={(roleWarning || (error && !error.startsWith('Incorrect password'))) && ' '}>
           <input type="text" value={username} autoCapitalize="none" onChange={(ev) => setUsername(ev.target.value)} />
         </Field>
         <Field label="Password" error={error && ' '}>
